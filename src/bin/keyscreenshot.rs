@@ -52,8 +52,7 @@ fn main() {
                     if last_saved == buffer {
                         println!("Ignored frame");
                         Some(last_saved)
-                    }
-                    else {
+                    } else {
                         let mut bitflipped = Vec::with_capacity(w * h * 4);
                         for pixel in &buffer {
                             //let (b, g, r, a) = (pixel[0], pixel[1], pixel[2], pixel[3]);
@@ -77,7 +76,7 @@ fn main() {
 
                         Some(buffer)
                     }
-                },
+                }
             };
         }
     });
@@ -91,8 +90,8 @@ fn main() {
         let mut frameinfo_last: Option<FrameInfo> = None;
         for _ in 0..200 {
             loop {
-                let (buffer,w,h) = match manager.capture_frame() {
-                    Ok((buffer, (w,h))) => (buffer,w,h),
+                let (buffer, w, h) = match manager.capture_frame() {
+                    Ok((buffer, (w, h))) => (buffer, w, h),
                     Err(CaptureError::Timeout) => {
                         match frameinfo_last.clone() {
                             None => continue,
@@ -102,7 +101,7 @@ fn main() {
                                 break;
                             }
                         }
-                    },
+                    }
                     Err(error) => {
                         /*if error.kind() == WouldBlock {
                             // Keep spinning.

@@ -7,6 +7,7 @@ authors = ["portablejim <dcseee-github@yahoo.com.au>"]
 scrap = "*"
 time = "*"
 image = "0.14.0"
+imagefmt = { git = "https://github.com/portablejim/imagefmt.git", branch = "better-compression" }
 screenshot = "0.0.7"
 twox-hash = "*"
 dxgcap = "0.0.8"

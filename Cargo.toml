@@ -1,0 +1,12 @@
+[package]
+name = "screenshot-stuff"
+version = "0.1.0"
+authors = ["portablejim <dcseee-github@yahoo.com.au>"]
+
+[dependencies]
+scrap = "*"
+time = "*"
+image = "0.14.0"
+screenshot = "0.0.7"
+twox-hash = "*"
+dxgcap = "0.0.8"

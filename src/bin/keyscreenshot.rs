@@ -1,7 +1,10 @@
+extern crate ctrlc;
 extern crate image;
 extern crate scrap;
 extern crate time;
 extern crate dxgcap;
+extern crate serde;
+extern crate serde_json;
 
 use image::{ImageBuffer, Rgba};
 use std::path::Path;
@@ -12,6 +15,11 @@ use std::sync::mpsc::{Sender, Receiver};
 use dxgcap::DXGIManager;
 use dxgcap::BGRA8;
 use dxgcap::CaptureError;
+use std::fs::OpenOptions;
+use std::io::prelude::*;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::fs::File;
 
 #[derive(Clone)]
 struct FrameInfo {
@@ -25,8 +33,13 @@ fn main() {
     let one_second = Duration::new(1, 0);
     let one_frame = one_second / 5;
 
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || { r.store(false, Ordering::SeqCst); })
+        .expect("Error setting Ctrl-C handler");
+
     let mut manager = DXGIManager::new(200).expect("Unable to make manager.");
-    manager.set_capture_source_index(1);
+    manager.set_capture_source_index(0);
     //manager.acquire_output_duplication();
 
     //let pixels = w * h * 4;
@@ -38,6 +51,11 @@ fn main() {
         let mut i = 0;
 
         let mut last_saved: Option<Vec<BGRA8>> = None;
+
+        let mut ignored = false;
+        //ctrlc::set_handler(move || {} ).expect("Error setting ctrlc handler");
+
+        let mut timings: Vec<Vec<String>> = vec![];
 
         for frameinfo in rx_all {
 
@@ -60,7 +78,7 @@ fn main() {
                             bitflipped.extend_from_slice(&[pixel.r, pixel.g, pixel.b, pixel.a])
                         }
 
-                        let pathname = format!("screenshot{}.png", i);
+                        let pathname = format!("screenshot{:03}.png", i);
                         let path = Path::new(&pathname);
 
                         let image: ImageBuffer<Rgba<u8>, _> =
@@ -71,7 +89,25 @@ fn main() {
                             "Couldn't save image to `screenshot{}.png`.",
                             i
                         ));
-                        println!("Image saved to `{}` @ {}.", pathname, frametime);
+
+                        let frametime_hours = frametime as u32 / 3600;
+                        let frametime_minutes = (frametime as u32 % 3600) / 60;
+                        let frametime_seconds = frametime % 60 as f64;
+                        let frametime_string = format!(
+                            "{:02}:{:02}:{:06.3}",
+                            frametime_hours,
+                            frametime_minutes,
+                            frametime_seconds
+                        );
+                        println!(
+                            "Image saved to `{}` @ {} - {} ",
+                            pathname,
+                            frametime_string,
+                            frametime
+                        );
+
+                        timings.push(vec![frametime_string, pathname.clone()]);
+
                         i += 1;
 
                         Some(buffer)
@@ -79,6 +115,14 @@ fn main() {
                 }
             };
         }
+        println!("Finishing up there...");
+        let mut timings_file = File::create("timings.json");
+        match timings_file {
+            Ok(f) => serde_json::to_writer(f, &timings).expect("Error writing timings file"),
+            Err(e) => println!("Error creating timings file"),
+        };
+        //buffer.write(b"some bytes")?;
+        println!("Finished up there...");
     });
 
     {
@@ -89,7 +133,10 @@ fn main() {
 
         let mut frameinfo_last: Option<FrameInfo> = None;
         for _ in 0..200 {
-            loop {
+            if !running.load(Ordering::SeqCst) {
+                break;
+            }
+            while running.load(Ordering::SeqCst) {
                 let (buffer, w, h) = match manager.capture_frame() {
                     Ok((buffer, (w, h))) => (buffer, w, h),
                     Err(CaptureError::Timeout) => {
@@ -137,6 +184,7 @@ fn main() {
 
         }
     }
-
+    println!("Finishing up here...");
     handle.join().expect("Error finishing up.");
+    println!("Finished")
 }

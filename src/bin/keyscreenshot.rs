@@ -1,6 +1,5 @@
 extern crate ctrlc;
 extern crate image;
-extern crate scrap;
 extern crate time;
 extern crate dxgcap;
 extern crate serde;

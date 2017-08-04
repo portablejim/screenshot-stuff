@@ -12,6 +12,7 @@ use std::fs;
 use std::char;
 use std::io::Read;
 use std::collections::BTreeSet;
+use std::fs::OpenOptions;
 use std::ascii::AsciiExt;
 use image::GenericImage;
 use image::Rgba;
@@ -31,14 +32,16 @@ fn main() {
 
     if args.len() == 2 {
         let image_hashes: HashMap<usize, String> = HashMap::new();
-        let mut image_hashes2: HashMap<u64, Vec<usize>> = HashMap::new();
+        //let mut image_hashes2: HashMap<u64, Vec<usize>> = HashMap::new();
+        let mut image_hashes2: HashMap<u64, String> = HashMap::new();
 
         let mut timings_file: String = String::new();
-        File::open(args.get(1).expect("Error getting path")).expect("No such file").read_to_string(&mut timings_file);
+        let timings_file_arg = args.get(1).expect("Error getting timings file argument");
+        File::open(timings_file_arg).expect("No such file").read_to_string(&mut timings_file);
         let timings_dir = Path::new(args.get(1).expect("Error getting timings arg")).parent().unwrap_or(Path::new("."));
         println!("{:?}", timings_dir);
         let timings: Vec<Vec<String>> = serde_json::from_slice(timings_file.as_ref()).unwrap_or(vec![]);
-        let timings_new: Vec<Vec<String>> = vec![];
+        let mut timings_new: Vec<Vec<String>> = vec![];
 
         let images_path = timings_dir.join("images");
         if !images_path.is_dir() && fs::create_dir(&images_path).is_err() {
@@ -63,27 +66,32 @@ fn main() {
                                 for pixel in image_data.raw_pixels() {
                                     hasher.write_u8(pixel);
                                 }
-                                image_hashes2.insert(hasher.finish(), vec![entry_num]);
+                                let hash_value = hasher.finish();
 
                                 // Setup oxipng
                                 let out_name = format!("slide{:03}.png", entry_num+1);
                                 let mut oxioptions = oxipng::Options::from_preset(4);
                                 oxioptions.interlace = Some(1);
-                                oxioptions.verbosity = Some(1);
+                                oxioptions.verbosity = Some(0);
                                 oxioptions.out_file = images_path.join(&out_name);
                                 let out_relpath = match images_path.file_name().and_then(|n|n.to_str()) {
                                     Some(images_path_name) => format!("{}/{}", images_path_name, out_name),
                                     None => String::new()
                                 };
 
+                                image_hashes2.insert(hash_value, out_relpath.clone());
 
                                 // Save png with oxipng
                                 let mut image_vec: Vec<u8> = Vec::new();
                                 image_data.save(&mut image_vec, image::PNG);
 
-                                println!("out: {}", oxioptions.out_file.to_str().unwrap_or("(none)"));
+                                println!("out-first: {}", oxioptions.out_file.to_str().unwrap_or("(none)"));
                                 let oxi_output = oxipng::optimize_from_memory(&image_vec, &oxioptions).expect("Error creating compressed image_data");
                                 File::create(images_path.join(&out_name)).expect("Error writing").write(&oxi_output);
+
+                                let mut entry_new: Vec<String> = entry.clone();
+                                entry_new[1] = out_relpath;
+                                timings_new.push(entry_new);
 
                                 Some(image_data)
                             }
@@ -101,39 +109,89 @@ fn main() {
                                 for pixel in image_data.raw_pixels() {
                                     hasher.write_u8(pixel);
                                 }
-                                image_hashes2.insert(hasher.finish(), vec![entry_num]);
+                                let hash_value = hasher.finish();
+                                println!("Hash: {}, seen: {}", hash_value, image_hashes2.contains_key(&hash_value));
 
                                 let (image_diff, diff_percent) = diff2(previous_entry, &image_data);
 
-                                // Setup oxipng
-                                let out_name = format!("slide{:03}.png", entry_num + 1);
-                                let mut oxioptions = oxipng::Options::from_preset(4);
-                                //oxioptions.interlace = Some(1);
-                                oxioptions.verbosity = Some(1);
-                                oxioptions.out_file = images_path.join(&out_name);
-                                let out_relpath = match images_path.file_name().and_then(|n| n.to_str()) {
-                                    Some(images_path_name) => format!("{}/{}", images_path_name, out_name),
-                                    None => String::new()
-                                };
+                                if image_hashes2.contains_key(&hash_value) {
+                                    let other_image_path = &image_hashes2[&hash_value];
+                                    match image::open(timings_dir.join(other_image_path)) {
+                                        Ok(other_image_data) => {
+                                            let (image_addition, diff_percent) = add2(other_image_data, &image_data);
 
-                                // Save png with oxipng
-                                let mut image_vec: Vec<u8> = Vec::new();
-                                image_diff.save(&mut image_vec, image::PNG);
+                                            // Setup oxipng
+                                            let mut oxioptions = oxipng::Options::from_preset(4);
+                                            //oxioptions.interlace = Some(1);
+                                            oxioptions.verbosity = Some(0);
+                                            oxioptions.out_file = timings_dir.join(other_image_path);
+                                            let out_relpath = other_image_path;
 
-                                println!("out: {}", oxioptions.out_file.to_str().unwrap_or("(none)"));
-                                let oxi_output = oxipng::optimize_from_memory(&image_vec, &oxioptions).expect("Error creating compressed image_data");
-                                File::create(images_path.join(&out_name)).expect("Error writing").write(&oxi_output);
+                                            // Save png with oxipng
+                                            let mut image_vec: Vec<u8> = Vec::new();
+                                            image_diff.save(&mut image_vec, image::PNG);
 
-                                Some(image_data)
-                            }
-                            Err(e) => {
-                                eprintln!("Error when reading {:?}", e);
+                                            println!("out-add: {}", oxioptions.out_file.to_str().unwrap_or("(none)"));
+                                            let oxi_output = oxipng::optimize_from_memory(&image_vec, &oxioptions).expect("Error creating compressed image_data");
+                                            File::create(timings_dir.join(&other_image_path)).expect("Error writing").write(&oxi_output);
+
+                                            let mut entry_new: Vec<String> = entry.clone();
+                                            entry_new[1] = out_relpath.clone();
+                                            timings_new.push(entry_new);
+
+                                            Some(image_data)
+                                        },
+                                        Err(e) => {
+                                            eprintln!("Error when reading old image: {:?}", e);
+                                            None
+                                        }
+                                    }
+                                } else {
+                                    // Setup oxipng
+                                    let out_name = format!("slide{:03}.png", entry_num + 1);
+                                    let mut oxioptions = oxipng::Options::from_preset(4);
+                                    //oxioptions.interlace = Some(1);
+                                    oxioptions.verbosity = Some(0);
+                                    oxioptions.out_file = images_path.join(&out_name);
+                                    let out_relpath = match images_path.file_name().and_then(|n| n.to_str()) {
+                                        Some(images_path_name) => format!("{}/{}", images_path_name, out_name),
+                                        None => String::new()
+                                    };
+                                    image_hashes2.insert(hash_value, out_relpath.clone());
+
+                                    // Save png with oxipng
+                                    let mut image_vec: Vec<u8> = Vec::new();
+                                    image_diff.save(&mut image_vec, image::PNG);
+
+                                    println!("out-diff: {}", oxioptions.out_file.to_str().unwrap_or("(none)"));
+                                    let oxi_output = oxipng::optimize_from_memory(&image_vec, &oxioptions).expect("Error creating compressed image_data");
+                                    File::create(images_path.join(&out_name)).expect("Error writing").write(&oxi_output);
+
+                                    let mut entry_new: Vec<String> = entry.clone();
+                                    entry_new[1] = out_relpath;
+                                    timings_new.push(entry_new);
+
+                                    Some(image_data)
+                                }
+                                }
+                                Err(e) => {
+                                eprintln ! ("Error when reading {:?}", e);
                                 None
+                                }
                             }
                         }
                     }
                 }
             }
+
+        println!("New json: {:?}", timings_new);
+        let timings_new_string = serde_json::to_string(&timings_new).expect("Error serialising new timings");
+        let mut rewrite_options = OpenOptions::new();
+        rewrite_options.write(true);
+        rewrite_options.truncate(true);
+        match rewrite_options.open(timings_file_arg).and_then(|mut f|f.write_all(&timings_new_string.as_bytes())) {
+            Ok(_) => (),
+            Err(e) => eprintln!("Error writing new json file: {:?}", e)
         }
     }
     return;
@@ -165,4 +223,9 @@ fn diff2(imga: &DynamicImage, imgb: &DynamicImage) -> (DynamicImage, u64) {
                 let pixels_same_percent = (pixels_same * 100) / (pixels_notsame + pixels_same);
 
     (imgc, pixels_same_percent)
+}
+
+fn add2(image_base: DynamicImage, extra: &DynamicImage) -> (DynamicImage, u64) {
+    // TODO: Make it work properly
+    return (image_base, 50);
 }

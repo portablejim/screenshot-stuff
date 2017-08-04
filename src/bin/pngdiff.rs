@@ -61,13 +61,25 @@ fn main() {
                         // First entry
                         match image::open(timings_dir.join(entry_image)) {
                             Ok(rgba_image_data) => {
-                                let image_data: DynamicImage = DynamicImage::ImageRgb8(rgba_image_data.to_rgb());
+                                let mut image_data_pre: DynamicImage = DynamicImage::ImageRgb8(rgba_image_data.to_rgb());
                                 // Generate hash
                                 let mut hasher = XxHash::default();
-                                for pixel in image_data.raw_pixels() {
+                                for pixel in rgba_image_data.raw_pixels() {
                                     hasher.write_u8(pixel);
                                 }
                                 let hash_value = hasher.finish();
+
+                                let (w,h) = image_data_pre.dimensions();
+                                for y in 0..h {
+                                    for x in 0..w {
+                                        let pixel = image_data_pre.get_pixel(x, y);
+                                        match (pixel[0], pixel[1], pixel[2]) {
+                                            (0,0,0) => image_data_pre.put_pixel(x, y, Rgba::from_channels(1,1,1,255)),
+                                            _ => ()
+                                        }
+                                    }
+                                }
+                                let image_data = image_data_pre;
 
                                 // Setup oxipng
                                 let out_name = format!("slide{:03}.png", entry_num+1);
@@ -82,6 +94,7 @@ fn main() {
                                     None => String::new()
                                 };
 
+                                println!("Hash: {}, seen: {}", hash_value, image_hashes2.contains_key(&hash_value));
                                 image_hashes2.insert(hash_value, out_relpath.clone());
 
                                 // Save png with oxipng
@@ -128,7 +141,8 @@ fn main() {
                                 if image_hashes2.contains_key(&hash_value) {
                                     let other_image_path = &image_hashes2[&hash_value];
                                     match image::open(timings_dir.join(other_image_path)) {
-                                        Ok(other_image_data) => {
+                                        Ok(other_image_data_pre) => {
+                                            let other_image_data = image::ImageRgb8(other_image_data_pre.to_rgb());
                                             let (image_addition, diff_percent) = add2(other_image_data, &image_data);
 
                                             // Setup oxipng
@@ -149,7 +163,7 @@ fn main() {
                                                 img_encoder.set(png::ColorType::RGB).set(png::BitDepth::Eight);
                                                 let mut img_writer = img_encoder.write_header().expect("Problem writing headers");
                                                 img_writer.write_chunk(png::chunk::tRNS, &trns_black_transparent);
-                                                img_writer.write_image_data(&image_data.raw_pixels());
+                                                img_writer.write_image_data(&image_addition.raw_pixels());
                                             }
 
                                             println!("out-add: {}", oxioptions.out_file.to_str().unwrap_or("(none)"));

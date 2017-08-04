@@ -14,21 +14,21 @@ use std::io::Read;
 use std::collections::BTreeSet;
 use std::fs::OpenOptions;
 use std::ascii::AsciiExt;
-use image::GenericImage;
-use image::Rgba;
-use image::Pixel;
-use image::DynamicImage;
+use image::{GenericImage,Rgb,Rgba,Pixel,DynamicImage};
 use std::io::Write;
 use std::hash::BuildHasherDefault;
 use std::collections::HashMap;
 use twox_hash::XxHash;
 use std::hash::Hasher;
+use png::HasParameters;
 
 extern crate imagefmt;
 use imagefmt::{ColFmt, ColType};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+
+    let trns_black_transparent: [u8; 6] = [0, 0, 0, 0, 0 ,0];
 
     if args.len() == 2 {
         let image_hashes: HashMap<usize, String> = HashMap::new();
@@ -60,7 +60,8 @@ fn main() {
                     None => {
                         // First entry
                         match image::open(timings_dir.join(entry_image)) {
-                            Ok(image_data) => {
+                            Ok(rgba_image_data) => {
+                                let image_data: DynamicImage = DynamicImage::ImageRgb8(rgba_image_data.to_rgb());
                                 // Generate hash
                                 let mut hasher = XxHash::default();
                                 for pixel in image_data.raw_pixels() {
@@ -73,6 +74,8 @@ fn main() {
                                 let mut oxioptions = oxipng::Options::from_preset(4);
                                 oxioptions.interlace = Some(1);
                                 oxioptions.verbosity = Some(0);
+                                oxioptions.bit_depth_reduction = false;
+                                oxioptions.color_type_reduction = false;
                                 oxioptions.out_file = images_path.join(&out_name);
                                 let out_relpath = match images_path.file_name().and_then(|n|n.to_str()) {
                                     Some(images_path_name) => format!("{}/{}", images_path_name, out_name),
@@ -83,7 +86,15 @@ fn main() {
 
                                 // Save png with oxipng
                                 let mut image_vec: Vec<u8> = Vec::new();
-                                image_data.save(&mut image_vec, image::PNG);
+                                let (img_width, img_height) = image_data.dimensions();
+                                println!("Pixels: {} vs {} vs {}", img_width * img_height*3, &image_data.raw_pixels().len(), img_width*img_height*4);
+                                {
+                                    let mut img_encoder = png::Encoder::new(&mut image_vec, img_width, img_height);
+                                    img_encoder.set(png::ColorType::RGB).set(png::BitDepth::Eight);
+                                    let mut img_writer = img_encoder.write_header().expect("Problem writing headers");
+                                    img_writer.write_chunk(png::chunk::tRNS, &trns_black_transparent);
+                                    img_writer.write_image_data(&image_data.raw_pixels());
+                                }
 
                                 println!("out-first: {}", oxioptions.out_file.to_str().unwrap_or("(none)"));
                                 let oxi_output = oxipng::optimize_from_memory(&image_vec, &oxioptions).expect("Error creating compressed image_data");
@@ -124,12 +135,22 @@ fn main() {
                                             let mut oxioptions = oxipng::Options::from_preset(4);
                                             //oxioptions.interlace = Some(1);
                                             oxioptions.verbosity = Some(0);
+                                            oxioptions.bit_depth_reduction = false;
+                                            oxioptions.color_type_reduction = false;
                                             oxioptions.out_file = timings_dir.join(other_image_path);
                                             let out_relpath = other_image_path;
 
                                             // Save png with oxipng
                                             let mut image_vec: Vec<u8> = Vec::new();
-                                            image_diff.save(&mut image_vec, image::PNG);
+                                            let (img_width, img_height) = image_addition.dimensions();
+                                            println!("Pixels: {} vs {} vs {}", img_width * img_height*3, &image_addition.raw_pixels().len(), img_width*img_height*4);
+                                            {
+                                                let mut img_encoder = png::Encoder::new(&mut image_vec, img_width, img_height);
+                                                img_encoder.set(png::ColorType::RGB).set(png::BitDepth::Eight);
+                                                let mut img_writer = img_encoder.write_header().expect("Problem writing headers");
+                                                img_writer.write_chunk(png::chunk::tRNS, &trns_black_transparent);
+                                                img_writer.write_image_data(&image_data.raw_pixels());
+                                            }
 
                                             println!("out-add: {}", oxioptions.out_file.to_str().unwrap_or("(none)"));
                                             let oxi_output = oxipng::optimize_from_memory(&image_vec, &oxioptions).expect("Error creating compressed image_data");
@@ -153,6 +174,8 @@ fn main() {
                                     //oxioptions.interlace = Some(1);
                                     oxioptions.verbosity = Some(0);
                                     oxioptions.out_file = images_path.join(&out_name);
+                                    oxioptions.bit_depth_reduction = false;
+                                    oxioptions.color_type_reduction = false;
                                     let out_relpath = match images_path.file_name().and_then(|n| n.to_str()) {
                                         Some(images_path_name) => format!("{}/{}", images_path_name, out_name),
                                         None => String::new()
@@ -161,7 +184,15 @@ fn main() {
 
                                     // Save png with oxipng
                                     let mut image_vec: Vec<u8> = Vec::new();
-                                    image_diff.save(&mut image_vec, image::PNG);
+                                    let (img_width, img_height) = image_diff.dimensions();
+                                    println!("Pixels: {} vs {} vs {}", img_width * img_height*3, &image_diff.raw_pixels().len(), img_width*img_height*4);
+                                    {
+                                        let mut img_encoder = png::Encoder::new(&mut image_vec, img_width, img_height);
+                                        img_encoder.set(png::ColorType::RGB).set(png::BitDepth::Eight);
+                                        let mut img_writer = img_encoder.write_header().expect("Problem writing headers");
+                                        img_writer.write_chunk(png::chunk::tRNS, &trns_black_transparent);
+                                        img_writer.write_image_data(&image_diff.raw_pixels());
+                                    }
 
                                     println!("out-diff: {}", oxioptions.out_file.to_str().unwrap_or("(none)"));
                                     let oxi_output = oxipng::optimize_from_memory(&image_vec, &oxioptions).expect("Error creating compressed image_data");
@@ -202,7 +233,7 @@ fn diff2(imga: &DynamicImage, imgb: &DynamicImage) -> (DynamicImage, u64) {
 
                 let (w, h) = imga.dimensions();
 
-                let mut imgc = image::DynamicImage::new_rgba8(w, h);
+                let mut imgc = image::DynamicImage::new_rgb8(w, h);
 
                 let mut pixels_same: u64 = 0;
                 let mut pixels_notsame: u64 = 0;
@@ -215,7 +246,11 @@ fn diff2(imga: &DynamicImage, imgb: &DynamicImage) -> (DynamicImage, u64) {
                             imgc.put_pixel(x, y, Rgba::from_channels(0, 0, 0, 0));
                             pixels_same += 1;
                         } else {
-                            imgc.put_pixel(x, y, pixel_b);
+                            let source_pixel = imgb.get_pixel(x, y);
+                            match (source_pixel[0], source_pixel[1], source_pixel[2]) {
+                                (0,0,0) => imgc.put_pixel(x, y, Rgba::from_channels(1,1,1, 255)),
+                                (r,g,b) => imgc.put_pixel(x, y, Rgba::from_channels(r,g,b, 255))
+                            }
                             pixels_notsame += 1;
                         }
                     }

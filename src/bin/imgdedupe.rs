@@ -2,16 +2,17 @@
 
 extern crate image;
 extern crate rayon;
+extern crate time;
 
 use std::env;
 use std::fs;
 use std::fs::DirEntry;
 use std::io;
-use std::path::Path;
 use image::{DynamicImage, GenericImage};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use time::PreciseTime;
 
 use rayon::prelude::*;
 
@@ -21,8 +22,11 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() >= 2 {
         let directory = &args[1].to_string();
+        let start = PreciseTime::now();
         let images = Arc::new(fetch_images(directory).expect("Failed to get images"));
+        let mid = PreciseTime::now();
         let dupes = find_dupe_indexes(&images);
+        let end = PreciseTime::now();
 
         println!("Dupes: {}", dupes.len());
         for (i_a, i_b) in dupes {
@@ -31,6 +35,8 @@ fn main() {
             println!("Remove {}", img_path_b);
             println!("Link {} to {}", img_path_a, img_path_b);
         }
+
+        println!("Times: Load {}s, Process {}s", start.to(mid), mid.to(end));
     }
 }
 
@@ -56,26 +62,17 @@ fn find_dupe_indexes(images: &Vec<ImageInfo>) -> Vec<(usize, usize)> {
                     let (n_a, n_b) = {
                         match own_work_rx.lock().ok().and_then(|rx| rx.try_recv().ok()) {
                             Some((a, b)) => (a, b),
-                            _ => {
-                                break
-                            },
+                            _ => break,
                         }
                     };
-                    let image_a: &ImageInfo = &images[n_a];
-                    let image_b: &ImageInfo = &images[n_b];
 
-                    if image_a.pixels.len() != image_b.pixels.len() {
+                    if &images[n_a].pixels.len() != &images[n_b].pixels.len() {
                         // Skipping images of different sizes.
                         continue;
                     }
 
                     let diff_num = calc_image_diff(&images[n_a], &images[n_b]);
 
-                    // +2 Just to make sure
-                    if diff_num > PIXEL_CUTOFF + 2 {
-                        // Already too different. Save cycles
-                        continue;
-                    }
                     // Pixels that are significatly different.
                     // Should probably be 0, but to give a tiny bit of leeway.
                     if diff_num <= 4 {

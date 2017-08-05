@@ -27,8 +27,29 @@ fn main() {
         for (i_a, i_b) in dupes {
             let img_path_a = &images[i_a].path;
             let img_path_b = &images[i_b].path;
-            println!("Remove {}", img_path_b);
-            println!("Link {} to {}", img_path_a, img_path_b);
+            println!("Removing {}", img_path_b);
+            println!("Linking {} to {}", img_path_a, img_path_b);
+            match fs::remove_file(img_path_b) {
+                Err(e) => {
+                    eprintln!("Can't remove file: {:?}", e);
+                    continue
+                },
+                Ok(_) => ()
+            }
+            match fs::hard_link(img_path_a, img_path_b) {
+                Err(_) => {
+                    eprintln!("Error linking {} to {}.\nTrying to copy instead...", img_path_a, img_path_b);
+                    match fs::copy(img_path_a, img_path_b) {
+                        Err(e) => {
+                            eprintln!("Copying failed: {:?}", e);
+                            continue
+                        }
+                        Ok(_) => ()
+                    }
+                },
+                Ok(_) => ()
+            }
+
         }
     }
 }

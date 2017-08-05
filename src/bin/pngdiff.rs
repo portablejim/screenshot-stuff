@@ -80,38 +80,13 @@ fn main() {
                                     }
                                 }
                                 let image_data = image_data_pre;
-
-                                // Setup oxipng
                                 let out_name = format!("slide{:03}.png", entry_num+1);
-                                let mut oxioptions = oxipng::Options::from_preset(4);
-                                oxioptions.interlace = Some(1);
-                                oxioptions.verbosity = Some(0);
-                                oxioptions.bit_depth_reduction = false;
-                                oxioptions.color_type_reduction = false;
-                                oxioptions.out_file = images_path.join(&out_name);
                                 let out_relpath = match images_path.file_name().and_then(|n|n.to_str()) {
                                     Some(images_path_name) => format!("{}/{}", images_path_name, out_name),
                                     None => String::new()
                                 };
-
-                                println!("Hash: {}, seen: {}", hash_value, image_hashes2.contains_key(&hash_value));
                                 image_hashes2.insert(hash_value, out_relpath.clone());
-
-                                // Save png with oxipng
-                                let mut image_vec: Vec<u8> = Vec::new();
-                                let (img_width, img_height) = image_data.dimensions();
-                                println!("Pixels: {} vs {} vs {}", img_width * img_height*3, &image_data.raw_pixels().len(), img_width*img_height*4);
-                                {
-                                    let mut img_encoder = png::Encoder::new(&mut image_vec, img_width, img_height);
-                                    img_encoder.set(png::ColorType::RGB).set(png::BitDepth::Eight);
-                                    let mut img_writer = img_encoder.write_header().expect("Problem writing headers");
-                                    img_writer.write_chunk(png::chunk::tRNS, &trns_black_transparent);
-                                    img_writer.write_image_data(&image_data.raw_pixels());
-                                }
-
-                                println!("out-first: {}", oxioptions.out_file.to_str().unwrap_or("(none)"));
-                                let oxi_output = oxipng::optimize_from_memory(&image_vec, &oxioptions).expect("Error creating compressed image_data");
-                                File::create(images_path.join(&out_name)).expect("Error writing").write(&oxi_output);
+                                save_image(&images_path.join(out_name), &image_data, 0);
 
                                 let mut entry_new: Vec<String> = entry.clone();
                                 entry_new[1] = out_relpath;
@@ -143,32 +118,10 @@ fn main() {
                                     match image::open(timings_dir.join(other_image_path)) {
                                         Ok(other_image_data_pre) => {
                                             let other_image_data = image::ImageRgb8(other_image_data_pre.to_rgb());
-                                            let (image_addition, diff_percent) = add2(other_image_data, &image_diff);
+                                            let (image_addition, add_percent) = add2(other_image_data, &image_diff);
 
-                                            // Setup oxipng
-                                            let mut oxioptions = oxipng::Options::from_preset(4);
-                                            //oxioptions.interlace = Some(1);
-                                            oxioptions.verbosity = Some(0);
-                                            oxioptions.bit_depth_reduction = false;
-                                            oxioptions.color_type_reduction = false;
-                                            oxioptions.out_file = timings_dir.join(other_image_path);
                                             let out_relpath = other_image_path;
-
-                                            // Save png with oxipng
-                                            let mut image_vec: Vec<u8> = Vec::new();
-                                            let (img_width, img_height) = image_addition.dimensions();
-                                            println!("Pixels: {} vs {} vs {}", img_width * img_height*3, &image_addition.raw_pixels().len(), img_width*img_height*4);
-                                            {
-                                                let mut img_encoder = png::Encoder::new(&mut image_vec, img_width, img_height);
-                                                img_encoder.set(png::ColorType::RGB).set(png::BitDepth::Eight);
-                                                let mut img_writer = img_encoder.write_header().expect("Problem writing headers");
-                                                img_writer.write_chunk(png::chunk::tRNS, &trns_black_transparent);
-                                                img_writer.write_image_data(&image_addition.raw_pixels());
-                                            }
-
-                                            println!("out-add: {}", oxioptions.out_file.to_str().unwrap_or("(none)"));
-                                            let oxi_output = oxipng::optimize_from_memory(&image_vec, &oxioptions).expect("Error creating compressed image_data");
-                                            File::create(timings_dir.join(&other_image_path)).expect("Error writing").write(&oxi_output);
+                                            save_image(&timings_dir.join(other_image_path), &image_addition, add_percent);
 
                                             let mut entry_new: Vec<String> = entry.clone();
                                             entry_new[1] = out_relpath.clone();
@@ -184,33 +137,12 @@ fn main() {
                                 } else {
                                     // Setup oxipng
                                     let out_name = format!("slide{:03}.png", entry_num + 1);
-                                    let mut oxioptions = oxipng::Options::from_preset(4);
-                                    //oxioptions.interlace = Some(1);
-                                    oxioptions.verbosity = Some(0);
-                                    oxioptions.out_file = images_path.join(&out_name);
-                                    oxioptions.bit_depth_reduction = false;
-                                    oxioptions.color_type_reduction = false;
                                     let out_relpath = match images_path.file_name().and_then(|n| n.to_str()) {
                                         Some(images_path_name) => format!("{}/{}", images_path_name, out_name),
                                         None => String::new()
                                     };
                                     image_hashes2.insert(hash_value, out_relpath.clone());
-
-                                    // Save png with oxipng
-                                    let mut image_vec: Vec<u8> = Vec::new();
-                                    let (img_width, img_height) = image_diff.dimensions();
-                                    println!("Pixels: {} vs {} vs {}", img_width * img_height*3, &image_diff.raw_pixels().len(), img_width*img_height*4);
-                                    {
-                                        let mut img_encoder = png::Encoder::new(&mut image_vec, img_width, img_height);
-                                        img_encoder.set(png::ColorType::RGB).set(png::BitDepth::Eight);
-                                        let mut img_writer = img_encoder.write_header().expect("Problem writing headers");
-                                        img_writer.write_chunk(png::chunk::tRNS, &trns_black_transparent);
-                                        img_writer.write_image_data(&image_diff.raw_pixels());
-                                    }
-
-                                    println!("out-diff: {}", oxioptions.out_file.to_str().unwrap_or("(none)"));
-                                    let oxi_output = oxipng::optimize_from_memory(&image_vec, &oxioptions).expect("Error creating compressed image_data");
-                                    File::create(images_path.join(&out_name)).expect("Error writing").write(&oxi_output);
+                                    save_image(&images_path.join(out_name), &image_diff, diff_percent);
 
                                     let mut entry_new: Vec<String> = entry.clone();
                                     entry_new[1] = out_relpath;
@@ -242,6 +174,57 @@ fn main() {
     return;
 }
 
+fn calc_percent_transparent(transparent: u64, total: u64) -> u64 {
+    if total == 0 {
+        return 0;
+    }
+
+    let raw_percent = (transparent * 100) / total;
+
+    match (transparent, raw_percent) {
+        (0, 0) => 0,
+        (_, 0) => 1,
+        (_, n) => n
+    }
+}
+
+fn save_image(out_path: &Path, input_image: &DynamicImage, percent_transparent: u64) {
+    let trns_black_transparent: [u8; 6] = [0, 0, 0, 0, 0 ,0];
+
+    let mut oxioptions = oxipng::Options::from_preset(4);
+    oxioptions.verbosity = Some(0);
+    if percent_transparent < 30 {
+        oxioptions.interlace = Some(1);
+    }
+    oxioptions.out_file = out_path.to_path_buf();
+    oxioptions.bit_depth_reduction = false;
+    oxioptions.color_type_reduction = false;
+    /*let out_relpath = match images_path.file_name().and_then(|n| n.to_str()) {
+        Some(images_path_name) => format!("{}/{}", images_path_name, out_name),
+        None => String::new()
+    };*/
+    //image_hashes2.insert(hash_value, out_relpath.clone());
+
+    // Save png with oxipng
+    let mut image_vec: Vec<u8> = Vec::new();
+    let (img_width, img_height) = input_image.dimensions();
+    println!("Pixels: {} vs {} vs {}", img_width * img_height*3, &input_image.raw_pixels().len(), img_width*img_height*4);
+    {
+        let mut img_encoder = png::Encoder::new(&mut image_vec, img_width, img_height);
+        img_encoder.set(png::ColorType::RGB).set(png::BitDepth::Eight);
+        let mut img_writer = img_encoder.write_header().expect("Problem writing headers");
+        if percent_transparent == 0 {
+            img_writer.write_chunk(png::chunk::tRNS, &trns_black_transparent);
+        }
+        img_writer.write_image_data(&input_image.raw_pixels());
+    }
+
+    println!("out-diff: {}", oxioptions.out_file.to_str().unwrap_or("(none)"));
+    let oxi_output = oxipng::optimize_from_memory(&image_vec, &oxioptions).expect("Error creating compressed image_data");
+    File::create(out_path).expect("Error writing").write(&oxi_output);
+
+}
+
 
 fn diff2(imga: &DynamicImage, imgb: &DynamicImage) -> (DynamicImage, u64) {
 
@@ -269,9 +252,8 @@ fn diff2(imga: &DynamicImage, imgb: &DynamicImage) -> (DynamicImage, u64) {
                         }
                     }
                 }
-                let pixels_same_percent = (pixels_same * 100) / (pixels_notsame + pixels_same);
 
-    (imgc, pixels_same_percent)
+    (imgc, calc_percent_transparent(pixels_same, pixels_same + pixels_notsame))
 }
 
 fn add2(image_base: DynamicImage, image_extra: &DynamicImage) -> (DynamicImage, u64) {
@@ -297,7 +279,5 @@ fn add2(image_base: DynamicImage, image_extra: &DynamicImage) -> (DynamicImage, 
         }
     }
 
-
-    // TODO: Make it work properly
-    return (image_output, (pixels_transparent * 100) / (w * h * 3) as u64);
+    return (image_output, calc_percent_transparent(pixels_transparent,(w * h * 3) as u64));
 }

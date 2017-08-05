@@ -143,7 +143,7 @@ fn main() {
                                     match image::open(timings_dir.join(other_image_path)) {
                                         Ok(other_image_data_pre) => {
                                             let other_image_data = image::ImageRgb8(other_image_data_pre.to_rgb());
-                                            let (image_addition, diff_percent) = add2(other_image_data, &image_data);
+                                            let (image_addition, diff_percent) = add2(other_image_data, &image_diff);
 
                                             // Setup oxipng
                                             let mut oxioptions = oxipng::Options::from_preset(4);
@@ -274,7 +274,30 @@ fn diff2(imga: &DynamicImage, imgb: &DynamicImage) -> (DynamicImage, u64) {
     (imgc, pixels_same_percent)
 }
 
-fn add2(image_base: DynamicImage, extra: &DynamicImage) -> (DynamicImage, u64) {
+fn add2(image_base: DynamicImage, image_extra: &DynamicImage) -> (DynamicImage, u64) {
+
+    let (w, h) = image_base.dimensions();
+    let mut image_output = image::DynamicImage::new_rgb8(w, h);
+
+    let mut pixels_transparent: u64 = 0;
+    for y in 0..h {
+        for x in 0..w {
+            let pixel_a = image_base.get_pixel(x, y);
+
+            match (pixel_a[0], pixel_a[1], pixel_a[2]) {
+                (0,0,0) => {
+                    let pixel_b = image_extra.get_pixel(x, y);
+                    image_output.put_pixel(x, y, pixel_b);
+                    if pixel_a == pixel_b {
+                        pixels_transparent += 1;
+                    }
+                },
+                (_,_,_) => image_output.put_pixel(x, y, image_base.get_pixel(x, y))
+            }
+        }
+    }
+
+
     // TODO: Make it work properly
-    return (image_base, 50);
+    return (image_output, (pixels_transparent * 100) / (w * h * 3) as u64);
 }

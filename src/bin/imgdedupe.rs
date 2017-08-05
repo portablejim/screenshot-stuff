@@ -15,6 +15,8 @@ use std::thread;
 
 use rayon::prelude::*;
 
+const PIXEL_CUTOFF: u64 = 4;
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() >= 2 {
@@ -22,6 +24,7 @@ fn main() {
         let images = Arc::new(fetch_images(directory).expect("Failed to get images"));
         let dupes = find_dupe_indexes(&images);
 
+        println!("Dupes: {}", dupes.len());
         for (i_a, i_b) in dupes {
             let img_path_a = &images[i_a].path;
             let img_path_b = &images[i_b].path;
@@ -36,15 +39,13 @@ fn find_dupe_indexes(images: &Vec<ImageInfo>) -> Vec<(usize, usize)> {
     let (results_tx_original, results_rx) = channel();
     let work_rx = Arc::new(Mutex::new(work_rx_raw));
 
-    let return_val;
-
     for i in 0..(0 + images.len() / 1 - 1) {
         for j in i + 1..images.len() {
             work_tx.send((i, j)).ok();
         }
     }
     {
-        let mut results_tx = results_tx_original;
+        let results_tx = results_tx_original;
         let mut threads = Vec::new();
         for _ in 0..6 {
             let own_work_rx = work_rx.clone();
@@ -53,49 +54,33 @@ fn find_dupe_indexes(images: &Vec<ImageInfo>) -> Vec<(usize, usize)> {
             threads.push(thread::spawn(move || {
                 loop {
                     let (n_a, n_b) = {
-                        match own_work_rx.lock() {
-                            Ok(rx) => {
-                                match rx.try_recv() {
-                                    Ok((a, b)) => (a, b),
-                                    _ => break,
-                                }
-                            }
-                            _ => continue,
+                        match own_work_rx.lock().ok().and_then(|rx| rx.try_recv().ok()) {
+                            Some((a, b)) => (a, b),
+                            _ => {
+                                break
+                            },
                         }
                     };
                     let image_a: &ImageInfo = &images[n_a];
                     let image_b: &ImageInfo = &images[n_b];
 
                     if image_a.pixels.len() != image_b.pixels.len() {
+                        // Skipping images of different sizes.
                         continue;
                     }
 
-                    let distance_cutoff = 8;
-                    let pixel_cutoff = 4;
+                    let diff_num = calc_image_diff(&images[n_a], &images[n_b]);
 
-                    let mut significantly_different: u64 = 0;
-                    for n in (0..image_a.pixels.len()).step_by(3) {
-                        let diff_r = (image_a.pixels[n] as i32 - image_b.pixels[n] as i32).abs() >
-                            distance_cutoff;
-                        let diff_g = (image_a.pixels[n + 1] as i32 -
-                                          image_b.pixels[n + 1] as i32)
-                            .abs() > distance_cutoff;
-                        let diff_b = (image_a.pixels[n + 2] as i32 -
-                                          image_b.pixels[n + 2] as i32)
-                            .abs() > distance_cutoff;
-                        if diff_r && diff_g && diff_b {
-                            significantly_different += 1;
-                        }
-                        // +2 Just to make sure
-                        if significantly_different > pixel_cutoff + 2 {
-                            // Already too different. Save cycles
-                            break;
-                        }
+                    // +2 Just to make sure
+                    if diff_num > PIXEL_CUTOFF + 2 {
+                        // Already too different. Save cycles
+                        continue;
                     }
                     // Pixels that are significatly different.
                     // Should probably be 0, but to give a tiny bit of leeway.
-                    if significantly_different <= 4 {
+                    if diff_num <= 4 {
                         own_results_tx.send((n_a, n_b)).ok();
+                        println!("Sent result: {} {}", n_a, n_b);
                     }
                 }
             }));
@@ -107,10 +92,29 @@ fn find_dupe_indexes(images: &Vec<ImageInfo>) -> Vec<(usize, usize)> {
             }
         }
     }
-    return_val = results_rx.iter().collect();
+    results_rx.iter().collect()
 
-    return return_val;
+}
 
+fn calc_image_diff(image_a: &ImageInfo, image_b: &ImageInfo) -> u64 {
+    let distance_cutoff = 8;
+
+    let mut significantly_different: u64 = 0;
+    for n in (0..image_a.pixels.len()).step_by(3) {
+        let diff_r = (image_a.pixels[n] as i32 - image_b.pixels[n] as i32).abs() >
+            distance_cutoff;
+        let diff_g = (image_a.pixels[n + 1] as i32 -
+            image_b.pixels[n + 1] as i32)
+            .abs() > distance_cutoff;
+        let diff_b = (image_a.pixels[n + 2] as i32 -
+            image_b.pixels[n + 2] as i32)
+            .abs() > distance_cutoff;
+        if diff_r && diff_g && diff_b {
+            significantly_different += 1;
+        }
+    }
+
+    significantly_different
 }
 
 #[derive(Clone)]

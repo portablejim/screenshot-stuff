@@ -2,31 +2,26 @@
 
 extern crate image;
 extern crate rayon;
-extern crate time;
 
-use std::env;
-use std::fs;
+use std::{env,fs,io,thread};
 use std::fs::DirEntry;
-use std::io;
 use image::{DynamicImage, GenericImage};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
-use std::thread;
-use time::PreciseTime;
 
 use rayon::prelude::*;
 
 const PIXEL_CUTOFF: u64 = 4;
 
+/*
+ * Compares images in a folder for a slight difference in pixel values
+ */
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() >= 2 {
         let directory = &args[1].to_string();
-        let start = PreciseTime::now();
         let images = Arc::new(fetch_images(directory).expect("Failed to get images"));
-        let mid = PreciseTime::now();
         let dupes = find_dupe_indexes(&images);
-        let end = PreciseTime::now();
 
         println!("Dupes: {}", dupes.len());
         for (i_a, i_b) in dupes {
@@ -35,8 +30,6 @@ fn main() {
             println!("Remove {}", img_path_b);
             println!("Link {} to {}", img_path_a, img_path_b);
         }
-
-        println!("Times: Load {}s, Process {}s", start.to(mid), mid.to(end));
     }
 }
 
@@ -77,7 +70,6 @@ fn find_dupe_indexes(images: &Vec<ImageInfo>) -> Vec<(usize, usize)> {
                     // Should probably be 0, but to give a tiny bit of leeway.
                     if diff_num <= PIXEL_CUTOFF {
                         own_results_tx.send((n_a, n_b)).ok();
-                        println!("Sent result: {} {}", n_a, n_b);
                     }
                 }
             }));

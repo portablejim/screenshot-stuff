@@ -9,35 +9,24 @@ use std::env;
 use std::path::Path;
 use std::fs::File;
 use std::fs;
-use std::char;
 use std::io::Read;
-use std::collections::BTreeSet;
 use std::fs::OpenOptions;
-use std::ascii::AsciiExt;
-use image::{GenericImage,Rgb,Rgba,Pixel,DynamicImage};
+use image::{GenericImage,Rgba,Pixel,DynamicImage};
 use std::io::Write;
-use std::hash::BuildHasherDefault;
 use std::collections::HashMap;
 use twox_hash::XxHash;
 use std::hash::Hasher;
 use png::HasParameters;
 
-extern crate imagefmt;
-use imagefmt::{ColFmt, ColType};
-
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    let trns_black_transparent: [u8; 6] = [0, 0, 0, 0, 0 ,0];
-
     if args.len() == 2 {
-        let image_hashes: HashMap<usize, String> = HashMap::new();
-        //let mut image_hashes2: HashMap<u64, Vec<usize>> = HashMap::new();
-        let mut image_hashes2: HashMap<u64, String> = HashMap::new();
+        let mut image_hashes: HashMap<u64, String> = HashMap::new();
 
         let mut timings_file: String = String::new();
         let timings_file_arg = args.get(1).expect("Error getting timings file argument");
-        File::open(timings_file_arg).expect("No such file").read_to_string(&mut timings_file);
+        File::open(timings_file_arg).expect("No such file").read_to_string(&mut timings_file).expect("Error reading timings file");
         let timings_dir = Path::new(args.get(1).expect("Error getting timings arg")).parent().unwrap_or(Path::new("."));
         println!("{:?}", timings_dir);
         let timings: Vec<Vec<String>> = serde_json::from_slice(timings_file.as_ref()).unwrap_or(vec![]);
@@ -50,7 +39,6 @@ fn main() {
         }
 
         let mut previous: Option<DynamicImage> = None;
-        let mut entry_num: usize = 0;
         println!("{}", timings.len());
         for entry_num in 0..timings.len() {
             let entry = timings.get(entry_num).expect("Weird length for timings");
@@ -85,7 +73,7 @@ fn main() {
                                     Some(images_path_name) => format!("{}/{}", images_path_name, out_name),
                                     None => String::new()
                                 };
-                                image_hashes2.insert(hash_value, out_relpath.clone());
+                                image_hashes.insert(hash_value, out_relpath.clone());
                                 save_image(&images_path.join(out_name), &image_data, 0);
 
                                 let mut entry_new: Vec<String> = entry.clone();
@@ -109,12 +97,12 @@ fn main() {
                                     hasher.write_u8(pixel);
                                 }
                                 let hash_value = hasher.finish();
-                                println!("Hash: {}, seen: {}", hash_value, image_hashes2.contains_key(&hash_value));
+                                println!("Hash: {}, seen: {}", hash_value, image_hashes.contains_key(&hash_value));
 
                                 let (image_diff, diff_percent) = diff2(previous_entry, &image_data);
 
-                                if image_hashes2.contains_key(&hash_value) {
-                                    let other_image_path = &image_hashes2[&hash_value];
+                                if image_hashes.contains_key(&hash_value) {
+                                    let other_image_path = &image_hashes[&hash_value];
                                     match image::open(timings_dir.join(other_image_path)) {
                                         Ok(other_image_data_pre) => {
                                             let other_image_data = image::ImageRgb8(other_image_data_pre.to_rgb());
@@ -141,7 +129,7 @@ fn main() {
                                         Some(images_path_name) => format!("{}/{}", images_path_name, out_name),
                                         None => String::new()
                                     };
-                                    image_hashes2.insert(hash_value, out_relpath.clone());
+                                    image_hashes.insert(hash_value, out_relpath.clone());
                                     save_image(&images_path.join(out_name), &image_diff, diff_percent);
 
                                     let mut entry_new: Vec<String> = entry.clone();
@@ -199,29 +187,34 @@ fn save_image(out_path: &Path, input_image: &DynamicImage, percent_transparent: 
     oxioptions.out_file = out_path.to_path_buf();
     oxioptions.bit_depth_reduction = false;
     oxioptions.color_type_reduction = false;
-    /*let out_relpath = match images_path.file_name().and_then(|n| n.to_str()) {
-        Some(images_path_name) => format!("{}/{}", images_path_name, out_name),
-        None => String::new()
-    };*/
-    //image_hashes2.insert(hash_value, out_relpath.clone());
 
     // Save png with oxipng
     let mut image_vec: Vec<u8> = Vec::new();
     let (img_width, img_height) = input_image.dimensions();
-    println!("Pixels: {} vs {} vs {}", img_width * img_height*3, &input_image.raw_pixels().len(), img_width*img_height*4);
     {
         let mut img_encoder = png::Encoder::new(&mut image_vec, img_width, img_height);
         img_encoder.set(png::ColorType::RGB).set(png::BitDepth::Eight);
         let mut img_writer = img_encoder.write_header().expect("Problem writing headers");
         if percent_transparent == 0 {
-            img_writer.write_chunk(png::chunk::tRNS, &trns_black_transparent);
+            match img_writer.write_chunk(png::chunk::tRNS, &trns_black_transparent) {
+                Ok(_) => (),
+                Err(e) => eprintln!("Error writing tRNS header to temporary PNG: {:?}", e)
+            }
         }
-        img_writer.write_image_data(&input_image.raw_pixels());
+        match img_writer.write_image_data(&input_image.raw_pixels()) {
+            Ok(_) => (),
+            Err(e) => {
+                eprintln!("Error writing image data for temporary PNG: {:?}", e);
+                return;
+            }
+        }
     }
 
-    println!("out-diff: {}", oxioptions.out_file.to_str().unwrap_or("(none)"));
     let oxi_output = oxipng::optimize_from_memory(&image_vec, &oxioptions).expect("Error creating compressed image_data");
-    File::create(out_path).expect("Error writing").write(&oxi_output);
+    match File::create(out_path).expect("Error writing").write(&oxi_output) {
+        Ok(_) => (),
+        Err(e) => eprintln!("Error writing optimised PNG: {:?}", e)
+    }
 
 }
 

@@ -25,32 +25,33 @@ fn main() {
 
         println!("Dupes: {}", dupes.len());
         for (i_a, i_b) in dupes {
-            let img_path_a = &images[i_a].path;
-            let img_path_b = &images[i_b].path;
-            println!("Removing {}", img_path_b);
-            println!("Linking {} to {}", img_path_a, img_path_b);
-            match fs::remove_file(img_path_b) {
-                Err(e) => {
-                    eprintln!("Can't remove file: {:?}", e);
-                    continue
-                },
-                Ok(_) => ()
-            }
-            match fs::hard_link(img_path_a, img_path_b) {
-                Err(_) => {
-                    eprintln!("Error linking {} to {}.\nTrying to copy instead...", img_path_a, img_path_b);
-                    match fs::copy(img_path_a, img_path_b) {
-                        Err(e) => {
-                            eprintln!("Copying failed: {:?}", e);
-                            continue
-                        }
-                        Ok(_) => ()
-                    }
-                },
-                Ok(_) => ()
-            }
-
+            link_or_error(&images[i_a].path, &images[i_b].path);
         }
+    }
+}
+
+fn link_or_error(img_path_a: &str, img_path_b: &str) {
+    println!("Removing {}", img_path_b);
+    println!("Linking {} to {}", img_path_a, img_path_b);
+    match fs::remove_file(img_path_b) {
+        Err(e) => {
+            eprintln!("Can't remove file: {:?}", e);
+            return
+        },
+        Ok(_) => ()
+    }
+    match fs::hard_link(img_path_a, img_path_b) {
+        Err(_) => {
+            eprintln!("Error linking {} to {}.\nTrying to copy instead...", img_path_a, img_path_b);
+            match fs::copy(img_path_a, img_path_b) {
+                Err(e) => {
+                    eprintln!("Copying failed: {:?}", e);
+                    return
+                }
+                Ok(_) => ()
+            }
+        },
+        Ok(_) => ()
     }
 }
 

@@ -73,9 +73,9 @@ fn find_dupe_indexes(images: &Vec<ImageInfo>) -> Vec<(usize, usize)> {
 
                     let diff_num = calc_image_diff(&images[n_a], &images[n_b]);
 
-                    // Pixels that are significatly different.
+                    // Pixels that are significantly different.
                     // Should probably be 0, but to give a tiny bit of leeway.
-                    if diff_num <= 4 {
+                    if diff_num <= PIXEL_CUTOFF {
                         own_results_tx.send((n_a, n_b)).ok();
                         println!("Sent result: {} {}", n_a, n_b);
                     }
@@ -108,6 +108,9 @@ fn calc_image_diff(image_a: &ImageInfo, image_b: &ImageInfo) -> u64 {
             .abs() > distance_cutoff;
         if diff_r && diff_g && diff_b {
             significantly_different += 1;
+        }
+        if significantly_different > PIXEL_CUTOFF {
+            break;
         }
     }
 

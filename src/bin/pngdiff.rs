@@ -48,137 +48,10 @@ fn main() {
         let mut previous: Option<DynamicImage> = None;
         println!("{}", timings.len());
         for entry_num in 0..timings.len() {
-            let entry = timings.get(entry_num).expect("Weird length for timings");
-            if entry.len() >= 2 {
-                let entry_image = timings_dir.join(entry.get(1).expect("No path supplied"));
-                previous = match previous {
-                    None => {
-                        // First entry
-                        match image::open(timings_dir.join(entry_image)) {
-                            Ok(rgba_img) => {
-                                let mut image_data_pre: DynamicImage = ImageRgb8(rgba_img.to_rgb());
-                                // Generate hash
-                                let mut hasher = XxHash::default();
-                                for pixel in rgba_img.raw_pixels() {
-                                    hasher.write_u8(pixel);
-                                }
-                                let hash_value = hasher.finish();
-
-                                let (w, h) = image_data_pre.dimensions();
-                                for y in 0..h {
-                                    for x in 0..w {
-                                        let pixel = image_data_pre.get_pixel(x, y);
-                                        match (pixel[0], pixel[1], pixel[2]) {
-                                            (0, 0, 0) => {
-                                                image_data_pre.put_pixel(
-                                                    x,
-                                                    y,
-                                                    Rgba::from_channels(1, 1, 1, 255),
-                                                )
-                                            }
-                                            _ => (),
-                                        }
-                                    }
-                                }
-                                let image_data = image_data_pre;
-                                let out_name = format!("slide{:03}.png", entry_num + 1);
-                                let out_relpath =
-                                    match images_path.file_name().and_then(|n| n.to_str()) {
-                                        Some(images_path_name) => {
-                                            format!("{}/{}", images_path_name, out_name)
-                                        }
-                                        None => String::new(),
-                                    };
-                                image_hashes.insert(hash_value, out_relpath.clone());
-                                save_image(&images_path.join(out_name), &image_data, 0);
-
-                                let mut entry_new: Vec<String> = entry.clone();
-                                entry_new[1] = out_relpath;
-                                timings_new.push(entry_new);
-
-                                Some(image_data)
-                            }
-                            Err(e) => {
-                                eprintln!("Error when reading {:?}", e);
-                                None
-                            }
-                        }
-                    }
-                    Some(ref previous_entry) => {
-                        match image::open(timings_dir.join(entry_image)) {
-                            Ok(image_data) => {
-                                // Generate hash
-                                let mut hasher = XxHash::default();
-                                for pixel in image_data.raw_pixels() {
-                                    hasher.write_u8(pixel);
-                                }
-                                let hash_value = hasher.finish();
-                                println!(
-                                    "Hash: {}, seen: {}",
-                                    hash_value,
-                                    image_hashes.contains_key(&hash_value)
-                                );
-
-                                let (image_diff, diff_percent) = diff2(previous_entry, &image_data);
-
-                                if image_hashes.contains_key(&hash_value) {
-                                    let other_image_path = &image_hashes[&hash_value];
-                                    match image::open(timings_dir.join(other_image_path)) {
-                                        Ok(other_image_data_pre) => {
-                                            let other_image_data =
-                                                ImageRgb8(other_image_data_pre.to_rgb());
-                                            let (image_addition, add_percent) =
-                                                add2(other_image_data, &image_diff);
-
-                                            let out_relpath = other_image_path;
-                                            save_image(
-                                                &timings_dir.join(other_image_path),
-                                                &image_addition,
-                                                add_percent,
-                                            );
-
-                                            let mut entry_new: Vec<String> = entry.clone();
-                                            entry_new[1] = out_relpath.clone();
-                                            timings_new.push(entry_new);
-
-                                            Some(image_data)
-                                        }
-                                        Err(e) => {
-                                            eprintln!("Error when reading old image: {:?}", e);
-                                            None
-                                        }
-                                    }
-                                } else {
-                                    // Setup oxipng
-                                    let out_name = format!("slide{:03}.png", entry_num + 1);
-                                    let out_relpath =
-                                        match images_path.file_name().and_then(|n| n.to_str()) {
-                                            Some(images_path_name) => {
-                                                format!("{}/{}", images_path_name, out_name)
-                                            }
-                                            None => String::new(),
-                                        };
-                                    image_hashes.insert(hash_value, out_relpath.clone());
-                                    save_image(
-                                        &images_path.join(out_name),
-                                        &image_diff,
-                                        diff_percent,
-                                    );
-
-                                    let mut entry_new: Vec<String> = entry.clone();
-                                    entry_new[1] = out_relpath;
-                                    timings_new.push(entry_new);
-
-                                    Some(image_data)
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("Error when reading {:?}", e);
-                                None
-                            }
-                        }
-                    }
-                }
+            let entry = timings.get(entry_num);
+            if entry.map_or_else(||false, |e| e.len() >= 2) {
+                let entry_unwrapped = entry.expect("Error getting entity, when previously it was ok");
+                handle_timings_entry(entry_num, entry_unwrapped, &mut previous, &timings, &mut timings_new, &mut image_hashes, timings_dir, &images_path);
             }
         }
 
@@ -196,6 +69,144 @@ fn main() {
         }
     }
     return;
+}
+
+fn handle_first_image(entry_num: usize, entry: &Vec<String>, timings_dir: &Path, images_path: &Path, entry_image: &Path, image_hashes: &mut HashMap<u64, String>, timings_new: &mut Vec<Vec<String>>) -> Option<DynamicImage> {
+    match image::open(timings_dir.join(entry_image)) {
+        Ok(rgba_img) => {
+            let mut image_data_pre: DynamicImage = ImageRgb8(rgba_img.to_rgb());
+            // Generate hash
+            let mut hasher = XxHash::default();
+            for pixel in rgba_img.raw_pixels() {
+                hasher.write_u8(pixel);
+            }
+            let hash_value = hasher.finish();
+
+            let (w, h) = image_data_pre.dimensions();
+            for y in 0..h {
+                for x in 0..w {
+                    let pixel = image_data_pre.get_pixel(x, y);
+                    match (pixel[0], pixel[1], pixel[2]) {
+                        (0, 0, 0) => {
+                            image_data_pre.put_pixel(
+                                x,
+                                y,
+                                Rgba::from_channels(1, 1, 1, 255),
+                            )
+                        }
+                        _ => (),
+                    }
+                }
+            }
+            let image_data = image_data_pre;
+            let out_name = format!("slide{:03}.png", entry_num + 1);
+            let out_relpath =
+                match images_path.file_name().and_then(|n| n.to_str()) {
+                    Some(images_path_name) => {
+                        format!("{}/{}", images_path_name, out_name)
+                    }
+                    None => String::new(),
+                };
+            image_hashes.insert(hash_value, out_relpath.clone());
+            save_image(&images_path.join(out_name), &image_data, 0);
+
+            let mut entry_new: Vec<String> = entry.clone();
+            entry_new[1] = out_relpath;
+            timings_new.push(entry_new);
+
+            Some(image_data)
+        }
+        Err(e) => {
+            eprintln!("Error when reading {:?}", e);
+            None
+        }
+    }
+}
+
+fn handle_timings_entry(entry_num: usize, entry: &Vec<String>, previous: &mut Option<DynamicImage>, timings: &Vec<Vec<String>>, mut timings_new: &mut Vec<Vec<String>>, image_hashes: &mut HashMap<u64, String>, timings_dir: &Path, images_path: &Path) {
+    if entry.len() >= 2 {
+        let entry_image = timings_dir.join(entry.get(1).expect("No path supplied"));
+        *previous = match *previous {
+            None => {
+                // First entry
+                handle_first_image(entry_num, &entry,timings_dir, images_path,&entry_image, image_hashes, &mut timings_new)
+            }
+            Some(ref previous_entry) => {
+                match image::open(timings_dir.join(entry_image)) {
+                    Ok(image_data) => {
+                        // Generate hash
+                        let mut hasher = XxHash::default();
+                        for pixel in image_data.raw_pixels() {
+                            hasher.write_u8(pixel);
+                        }
+                        let hash_value = hasher.finish();
+                        println!(
+                            "Hash: {}, seen: {}",
+                            hash_value,
+                            image_hashes.contains_key(&hash_value)
+                        );
+
+                        let (image_diff, diff_percent) = diff2(previous_entry, &image_data);
+
+                        if image_hashes.contains_key(&hash_value) {
+                            let other_image_path = &image_hashes[&hash_value];
+                            match image::open(timings_dir.join(other_image_path)) {
+                                Ok(other_image_data_pre) => {
+                                    let other_image_data =
+                                        ImageRgb8(other_image_data_pre.to_rgb());
+                                    let (image_addition, add_percent) =
+                                        add2(other_image_data, &image_diff);
+
+                                    let out_relpath = other_image_path;
+                                    save_image(
+                                        &timings_dir.join(other_image_path),
+                                        &image_addition,
+                                        add_percent,
+                                    );
+
+                                    let mut entry_new: Vec<String> = entry.clone();
+                                    entry_new[1] = out_relpath.clone();
+                                    timings_new.push(entry_new);
+
+                                    Some(image_data)
+                                }
+                                Err(e) => {
+                                    eprintln!("Error when reading old image: {:?}", e);
+                                    None
+                                }
+                            }
+                        } else {
+                            // Setup oxipng
+                            let out_name = format!("slide{:03}.png", entry_num + 1);
+                            let out_relpath =
+                                match images_path.file_name().and_then(|n| n.to_str()) {
+                                    Some(images_path_name) => {
+                                        format!("{}/{}", images_path_name, out_name)
+                                    }
+                                    None => String::new(),
+                                };
+                            image_hashes.insert(hash_value, out_relpath.clone());
+                            save_image(
+                                &images_path.join(out_name),
+                                &image_diff,
+                                diff_percent,
+                            );
+
+                            let mut entry_new: Vec<String> = entry.clone();
+                            entry_new[1] = out_relpath;
+                            timings_new.push(entry_new);
+
+                            Some(image_data)
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error when reading {:?}", e);
+                        None
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn calc_percent_transparent(transparent: u64, total: u64) -> u64 {

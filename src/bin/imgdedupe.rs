@@ -3,7 +3,7 @@
 extern crate image;
 extern crate rayon;
 
-use std::{env,fs,io,thread};
+use std::{env, fs, io, thread};
 use std::fs::DirEntry;
 use image::{DynamicImage, GenericImage};
 use std::sync::mpsc::channel;
@@ -36,22 +36,26 @@ fn link_or_error(img_path_a: &str, img_path_b: &str) {
     match fs::remove_file(img_path_b) {
         Err(e) => {
             eprintln!("Can't remove file: {:?}", e);
-            return
-        },
-        Ok(_) => ()
+            return;
+        }
+        Ok(_) => (),
     }
     match fs::hard_link(img_path_a, img_path_b) {
         Err(_) => {
-            eprintln!("Error linking {} to {}.\nTrying to copy instead...", img_path_a, img_path_b);
+            eprintln!(
+                "Error linking {} to {}.\nTrying to copy instead...",
+                img_path_a,
+                img_path_b
+            );
             match fs::copy(img_path_a, img_path_b) {
                 Err(e) => {
                     eprintln!("Copying failed: {:?}", e);
-                    return
+                    return;
                 }
-                Ok(_) => ()
+                Ok(_) => (),
             }
-        },
-        Ok(_) => ()
+        }
+        Ok(_) => (),
     }
 }
 
@@ -112,14 +116,11 @@ fn calc_image_diff(image_a: &ImageInfo, image_b: &ImageInfo) -> u64 {
 
     let mut significantly_different: u64 = 0;
     for n in (0..image_a.pixels.len()).step_by(3) {
-        let diff_r = (image_a.pixels[n] as i32 - image_b.pixels[n] as i32).abs() >
+        let diff_r = (image_a.pixels[n] as i32 - image_b.pixels[n] as i32).abs() > distance_cutoff;
+        let diff_g = (image_a.pixels[n + 1] as i32 - image_b.pixels[n + 1] as i32).abs() >
             distance_cutoff;
-        let diff_g = (image_a.pixels[n + 1] as i32 -
-            image_b.pixels[n + 1] as i32)
-            .abs() > distance_cutoff;
-        let diff_b = (image_a.pixels[n + 2] as i32 -
-            image_b.pixels[n + 2] as i32)
-            .abs() > distance_cutoff;
+        let diff_b = (image_a.pixels[n + 2] as i32 - image_b.pixels[n + 2] as i32).abs() >
+            distance_cutoff;
         if diff_r && diff_g && diff_b {
             significantly_different += 1;
         }

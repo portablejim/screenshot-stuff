@@ -9,6 +9,7 @@ extern crate twox_hash;
 
 use std::env;
 use std::path::Path;
+use std::path::PathBuf;
 use std::fs::File;
 use std::fs;
 use std::io::Read;
@@ -27,18 +28,9 @@ fn main() {
     if args.len() == 2 {
         let mut image_hashes: HashMap<u64, String> = HashMap::new();
 
-        let mut timings_file: String = String::new();
         let timings_file_arg = args.get(1).expect("Error getting timings file argument");
-        File::open(timings_file_arg)
-            .expect("No such file")
-            .read_to_string(&mut timings_file)
-            .expect("Error reading timings file");
-        let timings_dir = Path::new(args.get(1).expect("Error getting timings arg"))
-            .parent()
-            .unwrap_or(Path::new("."));
+        let (timings_dir, timings) = read_timings(timings_file_arg);
         println!("{:?}", timings_dir);
-        let timings: Vec<Vec<String>> =
-            serde_json::from_slice(timings_file.as_ref()).unwrap_or(vec![]);
         let mut timings_new: Vec<Vec<String>> = vec![];
 
         let images_path = timings_dir.join("images");
@@ -91,6 +83,18 @@ fn main() {
         }
     }
     return;
+}
+
+fn read_timings(path: &String) -> (PathBuf, Vec<Vec<String>>) {
+    let mut timings_file: String = String::new();
+    File::open(timings_file_arg)
+        .expect("No such file")
+        .read_to_string(&mut timings_file)
+        .expect("Error reading timings file");
+    let timings_dir = Path::new(path).parent().unwrap_or(Path::new("."));
+    let timings: Vec<Vec<String>> = serde_json::from_slice(timings_file.as_ref()).unwrap_or(vec![]);
+
+    (timings_dir, timings)
 }
 
 fn handle_timings_entry(

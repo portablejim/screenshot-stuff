@@ -7,14 +7,13 @@ extern crate oxipng;
 extern crate png;
 extern crate twox_hash;
 
-use std::env;
+use std::{env, fs, thread};
 use std::path::Path;
 use std::path::PathBuf;
 use std::fs::File;
-use std::fs;
 use std::io::Read;
 use std::fs::OpenOptions;
-use image::{GenericImage, Rgba, Pixel, DynamicImage};
+use image::{ImageFormat,GenericImage, Rgba, Pixel, DynamicImage};
 use image::DynamicImage::ImageRgb8;
 use std::io::Write;
 use std::collections::HashMap;
@@ -50,7 +49,7 @@ fn main() {
                         entry,
                         previous,
                         &mut image_hashes,
-                        timings_dir,
+                        &timings_dir,
                         &images_path,
                     ) {
                         Ok((new_previous, new_entry)) => {
@@ -87,14 +86,14 @@ fn main() {
 
 fn read_timings(path: &String) -> (PathBuf, Vec<Vec<String>>) {
     let mut timings_file: String = String::new();
-    File::open(timings_file_arg)
+    File::open(path)
         .expect("No such file")
         .read_to_string(&mut timings_file)
         .expect("Error reading timings file");
     let timings_dir = Path::new(path).parent().unwrap_or(Path::new("."));
     let timings: Vec<Vec<String>> = serde_json::from_slice(timings_file.as_ref()).unwrap_or(vec![]);
 
-    (timings_dir, timings)
+    (timings_dir.to_owned(), timings)
 }
 
 fn handle_timings_entry(
@@ -105,42 +104,29 @@ fn handle_timings_entry(
     timings_dir: &Path,
     images_path: &Path,
 ) -> Result<(Option<DynamicImage>, Vec<String>), (String, Option<DynamicImage>)> {
-    //let entry_image = timings_dir.join(entry[1]);
     let entry_image = match entry.as_slice() {
         &[_, ref image, _..] => timings_dir.join(image),
-        _ => {
-            return Err((
-                format!("Error extracting config for item {}", entry_num),
-                previous,
-            ))
-        }
+        _ => return Err((format!("Error with entry {}", entry_num), previous)),
     };
     let image_data = match image::open(timings_dir.join(&entry_image)) {
         Ok(data) => data,
-        _ => {
-            return Err((
-                format!("Error loading image: {:?}", entry_image),
-                previous,
-            ))
-        }
+        _ => return Err((format!("Error loading img: {:?}", entry_image), previous)),
     };
 
     // Generate hash
-    let mut hasher = XxHash::default();
-    for pixel in image_data.raw_pixels() {
-        hasher.write_u8(pixel);
-    }
-    let hash_value = hasher.finish();
-    println!(
-        "Hash: {}, seen: {}",
-        hash_value,
-        image_hashes.contains_key(&hash_value)
-    );
+    let hasher_thread = img_gen_hash(&image_data);
+
+    let jpg_thread = img_gen_jpg(&image_data);
 
     let rgb_image_data = to_rgb_image(&image_data);
-    let (image_diff, diff_percent) = match previous {
-        None => (posterize_lite(rgb_image_data), 0),
-        Some(previous_entry) => diff2(&previous_entry, &rgb_image_data),
+    let (image_diff, diff_percent) = match &previous {
+        &None => (posterize_lite(rgb_image_data), 0),
+        &Some(ref previous_entry) => diff2(&previous_entry, &rgb_image_data),
+    };
+
+    let hash_value = match hasher_thread.join() {
+        Ok(h) => h,
+        _ => return Err((format!("Error generating hash"), previous)),
     };
 
     let out_name = format!("slide{:03}.png", entry_num + 1);
@@ -164,11 +150,37 @@ fn handle_timings_entry(
     if image_hashes.contains_key(&hash_value) {
         image_hashes.insert(hash_value, out_relpath.clone());
     }
+    let mut save_filename = images_path.join(name_post_hash);
+    let image_png =
     save_image(
-        &images_path.join(name_post_hash),
+        &save_filename,
         &image_post_hash,
         post_hash_percent,
     );
+    let image_smaller = match jpg_thread.join() {
+        Ok(Some(jpg_data)) => {
+            let jpg_len = jpg_data.len();
+            let png_len = image_png.len();
+
+            if jpg_len * 3 < png_len * 2 {
+                println!("JPEG is smaller");
+                save_filename.set_extension(".jpg");
+                jpg_data
+            }
+            else {
+                println!("PNG is smaller");
+                image_png
+            }
+        },
+        _ => image_png,
+    };
+
+    match File::create(save_filename).expect("Error writing").write(
+        &image_smaller,
+    ) {
+        Ok(_) => (),
+        Err(e) => eprintln!("Error writing optimised PNG: {:?}", e),
+    }
 
     let mut entry_new: Vec<String> = entry.clone();
     entry_new[1] = out_relpath.clone();
@@ -176,6 +188,34 @@ fn handle_timings_entry(
 
     Ok((Some(image_data), entry_new))
 }
+
+fn img_gen_hash(image_in: &DynamicImage) -> thread::JoinHandle<u64> {
+    let image = image_in.clone();
+    thread::spawn(move || {
+        let mut hasher = XxHash::default();
+        for pixel in image.raw_pixels() {
+            hasher.write_u8(pixel);
+        }
+        let hash_value = hasher.finish();
+        println!(
+            "Hash: {}",
+            hash_value,
+        );
+        hash_value
+    })
+}
+
+fn img_gen_jpg(image_in: &DynamicImage) -> thread::JoinHandle<Option<Vec<u8>>> {
+    let image = image_in.clone();
+    thread::spawn(move || {
+        let mut image_data: Vec<u8> = Vec::new();
+        match image.save(&mut image_data, ImageFormat::JPEG) {
+            Ok(_) => Some(image_data),
+            _ => None
+        }
+    })
+}
+
 
 fn posterize_lite(image_data: DynamicImage) -> DynamicImage {
     let mut image_data_mut = image_data;
@@ -214,7 +254,7 @@ fn calc_percent_transparent(transparent: u64, total: u64) -> u64 {
     }
 }
 
-fn save_image(out_path: &Path, input_image: &DynamicImage, percent_transparent: u64) {
+fn save_image(out_path: &Path, input_image: &DynamicImage, percent_transparent: u64) -> Vec<u8> {
     let trns_black_transparent: [u8; 6] = [0, 0, 0, 0, 0, 0];
 
     let mut oxioptions = oxipng::Options::from_preset(4);
@@ -245,20 +285,14 @@ fn save_image(out_path: &Path, input_image: &DynamicImage, percent_transparent: 
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Error writing image data for temporary PNG: {:?}", e);
-                return;
             }
         }
     }
 
     let oxi_output = oxipng::optimize_from_memory(&image_vec, &oxioptions)
         .expect("Error creating compressed image_data");
-    match File::create(out_path).expect("Error writing").write(
-        &oxi_output,
-    ) {
-        Ok(_) => (),
-        Err(e) => eprintln!("Error writing optimised PNG: {:?}", e),
-    }
 
+    oxi_output
 }
 
 

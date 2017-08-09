@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::fs::File;
 use std::io::Read;
 use std::fs::OpenOptions;
-use image::{ImageFormat,GenericImage, Rgba, Pixel, DynamicImage};
+use image::{ImageFormat, GenericImage, Rgba, Pixel, DynamicImage};
 use image::DynamicImage::ImageRgb8;
 use std::io::Write;
 use std::collections::HashMap;
@@ -49,6 +49,7 @@ fn main() {
                         entry,
                         previous,
                         &mut image_hashes,
+                        &mut timings_new,
                         &timings_dir,
                         &images_path,
                     ) {
@@ -101,6 +102,7 @@ fn handle_timings_entry(
     entry: &Vec<String>,
     previous: Option<DynamicImage>,
     image_hashes: &mut HashMap<u64, String>,
+    timings_new: &mut Vec<Vec<String>>,
     timings_dir: &Path,
     images_path: &Path,
 ) -> Result<(Option<DynamicImage>, Vec<String>), (String, Option<DynamicImage>)> {
@@ -130,57 +132,67 @@ fn handle_timings_entry(
     };
 
     let out_name = format!("slide{:03}.png", entry_num + 1);
-    let (name_post_hash, image_post_hash, post_hash_percent) =
+    let (name_post_hash, image_post_hash, post_hash_percent, hash_matched) =
         if image_hashes.contains_key(&hash_value) {
             let other_image_path = &image_hashes[&hash_value];
             match image::open(timings_dir.join(other_image_path)).map(|i| ImageRgb8(i.to_rgb())) {
                 Ok(other_image_data) => {
                     let (a, b) = add2(other_image_data, &image_diff);
-                    (other_image_path.to_string(), a, b)
+                    (other_image_path.to_string(), a, b, true)
                 }
-                _ => (out_name, image_diff, diff_percent),
+                _ => (out_name, image_diff, diff_percent, false),
             }
         } else {
-            (out_name, image_diff, diff_percent)
+            (out_name, image_diff, diff_percent, false)
         };
     let out_relpath = match images_path.file_name().and_then(|n| n.to_str()) {
         Some(images_path_name) => format!("{}/{}", images_path_name, name_post_hash),
         None => String::new(),
     };
-    if image_hashes.contains_key(&hash_value) {
-        image_hashes.insert(hash_value, out_relpath.clone());
-    }
     let mut save_filename = images_path.join(name_post_hash);
-    let image_png =
-    save_image(
-        &save_filename,
-        &image_post_hash,
-        post_hash_percent,
-    );
+    let image_png = save_image(&save_filename, &image_post_hash, post_hash_percent);
     let image_smaller = match jpg_thread.join() {
         Ok(Some(jpg_data)) => {
             let jpg_len = jpg_data.len();
             let png_len = image_png.len();
 
-            if jpg_len * 3 < png_len * 2 {
+            if jpg_len * 5 < png_len * 2 {
                 println!("JPEG is smaller");
-                save_filename.set_extension(".jpg");
+                let old_save_filename = save_filename.clone();
+                save_filename.set_extension("jpg");
+                if hash_matched && old_save_filename != save_filename {
+                    for e in timings_new.iter_mut() {
+                        if e.len() >= 2 && Some(&*e[1]).eq(&old_save_filename.to_str()) {
+                            e[1] = save_filename.to_string_lossy().to_string();
+                            fs::remove_file(&old_save_filename).unwrap_or_else(|_| {
+                                eprintln!("Error removing file")
+                            });
+                        }
+                    }
+                }
                 jpg_data
-            }
-            else {
+            } else {
                 println!("PNG is smaller");
                 image_png
             }
-        },
+        }
         _ => image_png,
     };
 
-    match File::create(save_filename).expect("Error writing").write(
-        &image_smaller,
-    ) {
+    match File::create(&save_filename)
+        .expect(&format!("Error writing final image: {:?}", &save_filename))
+        .write(&image_smaller) {
         Ok(_) => (),
-        Err(e) => eprintln!("Error writing optimised PNG: {:?}", e),
+        Err(e) => eprintln!("Error writing optimised image: {:?}", e),
     }
+    match save_filename.clone().to_str() {
+        Some(file_name) => {
+            image_hashes
+                .insert(hash_value, file_name.to_owned())
+                .is_some()
+        }
+        _ => false,
+    };
 
     let mut entry_new: Vec<String> = entry.clone();
     entry_new[1] = out_relpath.clone();
@@ -211,7 +223,7 @@ fn img_gen_jpg(image_in: &DynamicImage) -> thread::JoinHandle<Option<Vec<u8>>> {
         let mut image_data: Vec<u8> = Vec::new();
         match image.save(&mut image_data, ImageFormat::JPEG) {
             Ok(_) => Some(image_data),
-            _ => None
+            _ => None,
         }
     })
 }

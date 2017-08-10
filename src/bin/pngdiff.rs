@@ -167,7 +167,7 @@ fn handle_timings_entry(
             let jpg_len = jpg_data.len();
             let png_len = image_png.len();
 
-            if jpg_len * 5 < png_len * 2 {
+            if jpg_len * 3 < png_len * 2 {
                 println!("JPEG is smaller");
                 let old_save_filename = save_filename.clone();
                 save_filename.set_extension("jpg");

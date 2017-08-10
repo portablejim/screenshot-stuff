@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::fs::File;
 use std::io::Read;
 use std::fs::OpenOptions;
+use std::sync::Arc;
 use image::{ImageFormat, GenericImage, Rgba, Pixel, DynamicImage};
 use image::DynamicImage::ImageRgb8;
 use std::io::Write;
@@ -114,102 +115,111 @@ fn handle_timings_entry(
         _ => return Err((format!("Error with entry {}", entry_num), previous)),
     };
     let image_data = match image::open(timings_dir.join(&entry_image)) {
-        Ok(data) => data,
+        Ok(data) => Arc::new(data),
         _ => return Err((format!("Error loading img: {:?}", entry_image), previous)),
     };
 
-    // Generate hash
-    let hasher_thread = img_gen_hash(&image_data);
+    let rel_path = {
+        // Generate hash
+        let hasher_thread = img_gen_hash(image_data.as_ref());
 
-    let jpg_thread = img_gen_jpg(&image_data);
+        let jpg_thread = img_gen_jpg(image_data.as_ref());
 
-    let rgb_image_data = to_rgb_image(&image_data);
-    let (image_diff, diff_percent) = match &previous {
-        &None => (posterize_lite(rgb_image_data), 0),
-        &Some(ref previous_entry) => diff2(&previous_entry, &rgb_image_data),
-    };
-
-    let hash_value = match hasher_thread.join() {
-        Ok(h) => h,
-        _ => return Err((format!("Error generating hash"), previous)),
-    };
-
-    let out_name = format!("slide{:03}.png", entry_num + 1);
-    let (name_post_hash, image_post_hash, post_hash_percent, hash_matched) =
-        if image_hashes.contains_key(&hash_value) {
-            let other_image_path = &image_hashes[&hash_value];
-            match image::open(timings_dir.join(other_image_path)).map(|i| ImageRgb8(i.to_rgb())) {
-                Ok(other_image_data) => {
-                    let (a, b) = add2(other_image_data, &image_diff);
-                    let other_image_name = timings_dir
-                        .join(other_image_path)
-                        .file_name()
-                        .and_then(|n| n.to_str().map(|s| s.to_string()));
-                    match other_image_name {
-                        Some(name_str) => (name_str.to_string(), a, b, true),
-                        _ => (out_name, image_diff, diff_percent, false),
-                    }
-                }
-                _ => (out_name, image_diff, diff_percent, false),
-            }
-        } else {
-            (out_name, image_diff, diff_percent, false)
+        let (image_diff, diff_percent) = match &previous {
+            &None => (Arc::clone(&image_data), 0),
+            &Some(ref previous_entry) => diff2(&previous_entry, image_data.as_ref()),
         };
-    let out_relpath = match images_path.file_name().and_then(|n| n.to_str()) {
-        Some(images_path_name) => format!("{}/{}", images_path_name, name_post_hash),
-        None => String::new(),
-    };
-    let mut save_filename = images_path.join(name_post_hash);
-    let image_png = save_image(&save_filename, image_post_hash, post_hash_percent);
-    let image_smaller = match jpg_thread.join() {
-        Ok(Some(jpg_data)) => {
-            let jpg_len = jpg_data.len();
-            let png_len = image_png.len();
 
-            if jpg_len * 3 < png_len * 2 {
-                let old_save_filename = save_filename.clone();
-                save_filename.set_extension("jpg");
-                if hash_matched && old_save_filename != save_filename {
-                    for e in timings_new.iter_mut() {
-                        if e.len() >= 2 && Some(&*e[1]).eq(&old_save_filename.to_str()) {
-                            e[1] = save_filename.to_string_lossy().to_string();
-                            fs::remove_file(&old_save_filename).unwrap_or_else(|_| {
-                                eprintln!("Error removing file")
-                            });
+        let hash_value = match hasher_thread.join() {
+            Ok(h) => h,
+            _ => return Err((format!("Error generating hash"), previous)),
+        };
+
+        let out_name = format!("slide{:03}.png", entry_num + 1);
+        let (name_post_hash, image_post_hash, post_hash_percent, hash_matched) =
+            if image_hashes.contains_key(&hash_value) {
+                let other_image_path = &image_hashes[&hash_value];
+                match image::open(timings_dir.join(other_image_path)).map(|i| {
+                    ImageRgb8(i.to_rgb())
+                }) {
+                    Ok(other_image_data) => {
+                        let (a, b) = add2(other_image_data, image_diff.as_ref());
+                        let other_image_name = timings_dir
+                            .join(other_image_path)
+                            .file_name()
+                            .and_then(|n| n.to_str().map(|s| s.to_string()));
+                        match other_image_name {
+                            Some(name_str) => (name_str.to_string(), Arc::new(a), b, true),
+                            _ => (out_name, image_diff, diff_percent, false),
                         }
                     }
+                    _ => (out_name, image_diff, diff_percent, false),
                 }
-                jpg_data
             } else {
-                image_png
+                (out_name, image_diff, diff_percent, false)
+            };
+        let out_relpath = match images_path.file_name().and_then(|n| n.to_str()) {
+            Some(images_path_name) => format!("{}/{}", images_path_name, name_post_hash),
+            None => String::new(),
+        };
+        let mut save_filename = images_path.join(name_post_hash);
+        let image_png = save_image(&save_filename, image_post_hash, post_hash_percent);
+        let image_smaller = match jpg_thread.join() {
+            Ok(Some(jpg_data)) => {
+                let jpg_len = jpg_data.len();
+                let png_len = image_png.len();
+
+                if jpg_len * 3 < png_len * 2 {
+                    let old_save_filename = save_filename.clone();
+                    save_filename.set_extension("jpg");
+                    if hash_matched && old_save_filename != save_filename {
+                        for e in timings_new.iter_mut() {
+                            if e.len() >= 2 && Some(&*e[1]).eq(&old_save_filename.to_str()) {
+                                e[1] = save_filename.to_string_lossy().to_string();
+                                fs::remove_file(&old_save_filename).unwrap_or_else(|_| {
+                                    eprintln!("Error removing file")
+                                });
+                            }
+                        }
+                    }
+                    jpg_data
+                } else {
+                    image_png
+                }
             }
+            _ => image_png,
+        };
+
+        match File::create(&save_filename)
+            .expect(&format!("Error writing final image: {:?}", &save_filename))
+            .write(&image_smaller) {
+            Ok(_) => (),
+            Err(e) => eprintln!("Error writing optimised image: {:?}", e),
         }
-        _ => image_png,
+        match save_filename.strip_prefix(&timings_dir).ok().and_then(
+            |p| {
+                p.clone().to_str().to_owned()
+            },
+        ) {
+            Some(file_name) => {
+                image_hashes
+                    .insert(hash_value, file_name.to_owned())
+                    .is_some()
+            }
+            _ => false,
+        };
+
+        out_relpath
     };
 
-    match File::create(&save_filename)
-        .expect(&format!("Error writing final image: {:?}", &save_filename))
-        .write(&image_smaller) {
-        Ok(_) => (),
-        Err(e) => eprintln!("Error writing optimised image: {:?}", e),
-    }
-    match save_filename.strip_prefix(&timings_dir).ok().and_then(
-        |p| {
-            p.clone().to_str().to_owned()
-        },
-    ) {
-        Some(file_name) => {
-            image_hashes
-                .insert(hash_value, file_name.to_owned())
-                .is_some()
-        }
-        _ => false,
-    };
 
     let mut entry_new: Vec<String> = entry.clone();
-    entry_new[1] = out_relpath.clone();
+    entry_new[1] = rel_path.clone();
 
-    Ok((Some(image_data), entry_new))
+    let output_data = Arc::try_unwrap(image_data).ok().expect(
+        "ARCs should be dropped by now",
+    );
+    Ok((Some(output_data), entry_new))
 }
 
 fn img_gen_hash(image_in: &DynamicImage) -> thread::JoinHandle<u64> {
@@ -235,30 +245,6 @@ fn img_gen_jpg(image_in: &DynamicImage) -> thread::JoinHandle<Option<Vec<u8>>> {
     })
 }
 
-
-fn posterize_lite(image_data: DynamicImage) -> DynamicImage {
-    let mut image_data_mut = image_data;
-    let (w, h) = image_data_mut.dimensions();
-    for y in 0..h {
-        for x in 0..w {
-            let pixel = image_data_mut.get_pixel(x, y);
-            match (pixel[0], pixel[1], pixel[2]) {
-                (0, 0, 0) => image_data_mut.put_pixel(x, y, Rgba::from_channels(1, 1, 1, 255)),
-                _ => (),
-            }
-        }
-    }
-    image_data_mut
-}
-
-fn to_rgb_image(input_image: &DynamicImage) -> DynamicImage {
-    match input_image {
-        &image::ImageRgb8(_) => input_image.clone(),
-        _ => ImageRgb8(input_image.to_rgb().clone()),
-
-    }
-}
-
 fn calc_percent_transparent(transparent: u64, total: u64) -> u64 {
     if total == 0 {
         return 0;
@@ -273,7 +259,11 @@ fn calc_percent_transparent(transparent: u64, total: u64) -> u64 {
     }
 }
 
-fn save_image(out_path: &Path, input_image: DynamicImage, percent_transparent: u64) -> Vec<u8> {
+fn save_image(
+    out_path: &Path,
+    input_image: Arc<DynamicImage>,
+    percent_transparent: u64,
+) -> Vec<u8> {
     let trns_black_transparent: [u8; 6] = [0, 0, 0, 0, 0, 0];
 
     let mut oxioptions = oxipng::Options::from_preset(2);
@@ -290,16 +280,18 @@ fn save_image(out_path: &Path, input_image: DynamicImage, percent_transparent: u
     let (img_width, img_height) = input_image.dimensions();
     {
         // With custom convert function
+        let chunk_width = input_image.raw_pixels().len() / (img_height * img_width) as usize;
+        assert!(chunk_width >= 3);
         let rgba_pixels: Vec<u8> = input_image
             .raw_pixels()
-            .chunks(3)
+            .chunks(chunk_width)
             .map(|p| match (p[0], p[1], p[2]) {
                 (0, 0, 0) => vec![0, 0, 0, 0],
                 (r, g, b) => vec![r, g, b, 255],
             })
             .flat_map(|v| v)
             .collect();
-        assert!(img_height * img_width * 4 == rgba_pixels.len() as u32);
+        assert_eq!(img_height * img_width * 4, rgba_pixels.len() as u32);
 
         // Quantize
         let (palette, post_quant_image) =
@@ -388,7 +380,7 @@ fn do_quantize(pixels: &Vec<u8>, width: usize, height: usize) -> Option<(Vec<u8>
     return Some((palette_bytes, quantized_pixels));
 }
 
-fn diff2(imga: &DynamicImage, imgb: &DynamicImage) -> (DynamicImage, u64) {
+fn diff2(imga: &DynamicImage, imgb: &DynamicImage) -> (Arc<DynamicImage>, u64) {
 
     let (w, h) = imga.dimensions();
 
@@ -416,7 +408,7 @@ fn diff2(imga: &DynamicImage, imgb: &DynamicImage) -> (DynamicImage, u64) {
     }
 
     (
-        imgc,
+        Arc::new(imgc),
         calc_percent_transparent(pixels_same, pixels_same + pixels_notsame),
     )
 }

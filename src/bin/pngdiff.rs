@@ -302,7 +302,7 @@ fn save_image(out_path: &Path, input_image: DynamicImage, percent_transparent: u
         assert!(img_height * img_width * 4 == rgba_pixels.len() as u32);
 
         // Quantize
-        let (mut palette, post_quant_image) =
+        let (palette, post_quant_image) =
             do_quantize(&rgba_pixels, img_width as usize, img_height as usize)
                 .unwrap_or((vec![], input_image.raw_pixels()));
 

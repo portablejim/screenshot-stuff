@@ -3,9 +3,11 @@
 extern crate image;
 extern crate serde_json;
 extern crate oxipng;
-//extern crate imagequant;
+extern crate imagequant;
 extern crate png;
 extern crate twox_hash;
+extern crate itertools;
+extern crate rgb;
 
 use std::{env, fs, thread};
 use std::path::Path;
@@ -20,6 +22,8 @@ use std::collections::HashMap;
 use twox_hash::XxHash;
 use std::hash::Hasher;
 use png::HasParameters;
+use imagequant::Attributes;
+use rgb::ComponentBytes;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -138,7 +142,14 @@ fn handle_timings_entry(
             match image::open(timings_dir.join(other_image_path)).map(|i| ImageRgb8(i.to_rgb())) {
                 Ok(other_image_data) => {
                     let (a, b) = add2(other_image_data, &image_diff);
-                    (other_image_path.to_string(), a, b, true)
+                    let other_image_name = timings_dir
+                        .join(other_image_path)
+                        .file_name()
+                        .and_then(|n| n.to_str().map(|s| s.to_string()));
+                    match other_image_name {
+                        Some(name_str) => (name_str.to_string(), a, b, true),
+                        _ => (out_name, image_diff, diff_percent, false),
+                    }
                 }
                 _ => (out_name, image_diff, diff_percent, false),
             }
@@ -150,7 +161,7 @@ fn handle_timings_entry(
         None => String::new(),
     };
     let mut save_filename = images_path.join(name_post_hash);
-    let image_png = save_image(&save_filename, &image_post_hash, post_hash_percent);
+    let image_png = save_image(&save_filename, image_post_hash, post_hash_percent);
     let image_smaller = match jpg_thread.join() {
         Ok(Some(jpg_data)) => {
             let jpg_len = jpg_data.len();
@@ -185,7 +196,11 @@ fn handle_timings_entry(
         Ok(_) => (),
         Err(e) => eprintln!("Error writing optimised image: {:?}", e),
     }
-    match save_filename.clone().to_str() {
+    match save_filename.strip_prefix(&timings_dir).ok().and_then(
+        |p| {
+            p.clone().to_str().to_owned()
+        },
+    ) {
         Some(file_name) => {
             image_hashes
                 .insert(hash_value, file_name.to_owned())
@@ -266,10 +281,10 @@ fn calc_percent_transparent(transparent: u64, total: u64) -> u64 {
     }
 }
 
-fn save_image(out_path: &Path, input_image: &DynamicImage, percent_transparent: u64) -> Vec<u8> {
+fn save_image(out_path: &Path, input_image: DynamicImage, percent_transparent: u64) -> Vec<u8> {
     let trns_black_transparent: [u8; 6] = [0, 0, 0, 0, 0, 0];
 
-    let mut oxioptions = oxipng::Options::from_preset(4);
+    let mut oxioptions = oxipng::Options::from_preset(2);
     oxioptions.verbosity = Some(0);
     if percent_transparent < 30 {
         oxioptions.interlace = Some(1);
@@ -277,23 +292,54 @@ fn save_image(out_path: &Path, input_image: &DynamicImage, percent_transparent: 
     oxioptions.out_file = out_path.to_path_buf();
     oxioptions.bit_depth_reduction = false;
     oxioptions.color_type_reduction = false;
+    oxioptions.palette_reduction = false;
 
-    // Save png with oxipng
     let mut image_vec: Vec<u8> = Vec::new();
     let (img_width, img_height) = input_image.dimensions();
     {
+        // With custom convert function
+        let rgba_pixels: Vec<u8> = input_image
+            .raw_pixels()
+            .chunks(3)
+            .map(|p| match (p[0], p[1], p[2]) {
+                (0, 0, 0) => vec![0, 0, 0, 0],
+                (r, g, b) => vec![r, g, b, 255],
+            })
+            .flat_map(|v| v)
+            .collect();
+        assert!(img_height * img_width * 4 == rgba_pixels.len() as u32);
+
+        // Quantize
+        let (mut palette, post_quant_image) =
+            do_quantize(&rgba_pixels, img_width as usize, img_height as usize)
+                .unwrap_or((vec![], input_image.raw_pixels()));
+
+        // Encode Image as png
         let mut img_encoder = png::Encoder::new(&mut image_vec, img_width, img_height);
-        img_encoder.set(png::ColorType::RGB).set(
-            png::BitDepth::Eight,
-        );
+        let color_type = match palette.len() > 0 {
+            true => png::ColorType::Indexed,
+            false => png::ColorType::RGB,
+        };
+        img_encoder.set(color_type).set(png::BitDepth::Eight);
         let mut img_writer = img_encoder.write_header().expect("Problem writing headers");
-        if percent_transparent != 0 {
+        if palette.len() > 0 {
+            match img_writer.write_chunk(png::chunk::PLTE, &palette) {
+                Ok(_) => (),
+                Err(e) => eprintln!("Error writing PLTE header to temporary PNG: {:?}", e),
+            }
+            if percent_transparent != 0 {
+                match img_writer.write_chunk(png::chunk::tRNS, &vec![0]) {
+                    Ok(_) => (),
+                    Err(e) => eprintln!("Error writing tRNS header to temporary PNG: {:?}", e),
+                }
+            }
+        } else if percent_transparent != 0 {
             match img_writer.write_chunk(png::chunk::tRNS, &trns_black_transparent) {
                 Ok(_) => (),
                 Err(e) => eprintln!("Error writing tRNS header to temporary PNG: {:?}", e),
             }
         }
-        match img_writer.write_image_data(&input_image.raw_pixels()) {
+        match img_writer.write_image_data(&post_quant_image) {
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Error writing image data for temporary PNG: {:?}", e);
@@ -301,12 +347,62 @@ fn save_image(out_path: &Path, input_image: &DynamicImage, percent_transparent: 
         }
     }
 
+    // Save png with oxipng
     let oxi_output = oxipng::optimize_from_memory(&image_vec, &oxioptions)
         .expect("Error creating compressed image_data");
 
     oxi_output
+    //image_vec
 }
 
+fn do_quantize(pixels: &Vec<u8>, width: usize, height: usize) -> Option<(Vec<u8>, Vec<u8>)> {
+    let mut image_quant = Attributes::new();
+    image_quant.set_max_colors(256);
+    image_quant.set_quality(70, 100);
+    let mut quant_image = match image_quant.new_image(&pixels, width, height, 0f64) {
+        Ok(i) => i,
+        _ => {
+            eprintln!("Error making new quantimage");
+            return None;
+        }
+    };
+    let mut post_quantisation = match image_quant.quantize(&mut quant_image) {
+        Ok(pq) => pq,
+        _ => {
+            eprintln!("Error quantizing");
+            return None;
+        }
+    };
+    let (mut palette, quantized_pixels) = match post_quantisation.remapped(&mut quant_image) {
+        Ok((p, q)) => (p, q),
+        _ => {
+            eprintln!("Error getting quantized data");
+            return None;
+        }
+    };
+
+    // First entry is the transparent one (I hope) and so set it to black.
+    // Allows easy conversion to RGB with #000 transparent value when re-read.
+    if palette[0].as_slice()[3] == 0 {
+        println!("Zeroing palette entry 0");
+        palette[0].as_mut_slice()[0] = 0;
+        palette[0].as_mut_slice()[1] = 0;
+        palette[0].as_mut_slice()[2] = 0;
+    } else {
+        println!(
+            "Not zeroing palette entry because alpha is {:?}",
+            palette.get(3)
+        );
+    }
+
+    println!("Palette entry 0: {:?}", palette[0]);
+    let palette_bytes: Vec<u8> = palette
+        .iter()
+        .flat_map(|p| p.as_slice()[0..3].to_owned())
+        .collect();
+
+    return Some((palette_bytes, quantized_pixels));
+}
 
 fn diff2(imga: &DynamicImage, imgb: &DynamicImage) -> (DynamicImage, u64) {
 

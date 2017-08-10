@@ -17,3 +17,10 @@ oxipng = "*"
 png = "*"
 threadpool = "*"
 rayon = "*"
+itertools = "*"
+rgb = "*"
+
+[dependencies.imagequant]
+#imagequant-sys = {git = "https://github.com/ImageOptim/libimagequant.git", branch = "msvc" }
+git = "https://github.com/portablejim/libimagequant-rust.git"
+branch = "msvc"

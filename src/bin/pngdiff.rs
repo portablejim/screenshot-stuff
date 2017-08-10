@@ -33,7 +33,6 @@ fn main() {
 
         let timings_file_arg = args.get(1).expect("Error getting timings file argument");
         let (timings_dir, timings) = read_timings(timings_file_arg);
-        println!("{:?}", timings_dir);
         let mut timings_new: Vec<Vec<String>> = vec![];
 
         let images_path = timings_dir.join("images");
@@ -43,7 +42,7 @@ fn main() {
         }
 
         let mut previous: Option<DynamicImage> = None;
-        println!("{}", timings.len());
+        println!("{} entries", timings.len());
         for entry_num in 0..timings.len() {
             match timings.get(entry_num) {
                 Some(entry) if entry.len() >= 2 => {
@@ -168,7 +167,6 @@ fn handle_timings_entry(
             let png_len = image_png.len();
 
             if jpg_len * 3 < png_len * 2 {
-                println!("JPEG is smaller");
                 let old_save_filename = save_filename.clone();
                 save_filename.set_extension("jpg");
                 if hash_matched && old_save_filename != save_filename {
@@ -183,7 +181,6 @@ fn handle_timings_entry(
                 }
                 jpg_data
             } else {
-                println!("PNG is smaller");
                 image_png
             }
         }
@@ -211,7 +208,6 @@ fn handle_timings_entry(
 
     let mut entry_new: Vec<String> = entry.clone();
     entry_new[1] = out_relpath.clone();
-    //timings_new.push(entry_new);
 
     Ok((Some(image_data), entry_new))
 }
@@ -224,10 +220,6 @@ fn img_gen_hash(image_in: &DynamicImage) -> thread::JoinHandle<u64> {
             hasher.write_u8(pixel);
         }
         let hash_value = hasher.finish();
-        println!(
-            "Hash: {}",
-            hash_value,
-        );
         hash_value
     })
 }
@@ -285,7 +277,7 @@ fn save_image(out_path: &Path, input_image: DynamicImage, percent_transparent: u
     let trns_black_transparent: [u8; 6] = [0, 0, 0, 0, 0, 0];
 
     let mut oxioptions = oxipng::Options::from_preset(2);
-    oxioptions.verbosity = Some(0);
+    oxioptions.verbosity = None;
     if percent_transparent < 30 {
         oxioptions.interlace = Some(1);
     }
@@ -352,7 +344,6 @@ fn save_image(out_path: &Path, input_image: DynamicImage, percent_transparent: u
         .expect("Error creating compressed image_data");
 
     oxi_output
-    //image_vec
 }
 
 fn do_quantize(pixels: &Vec<u8>, width: usize, height: usize) -> Option<(Vec<u8>, Vec<u8>)> {
@@ -384,18 +375,11 @@ fn do_quantize(pixels: &Vec<u8>, width: usize, height: usize) -> Option<(Vec<u8>
     // First entry is the transparent one (I hope) and so set it to black.
     // Allows easy conversion to RGB with #000 transparent value when re-read.
     if palette[0].as_slice()[3] == 0 {
-        println!("Zeroing palette entry 0");
         palette[0].as_mut_slice()[0] = 0;
         palette[0].as_mut_slice()[1] = 0;
         palette[0].as_mut_slice()[2] = 0;
-    } else {
-        println!(
-            "Not zeroing palette entry because alpha is {:?}",
-            palette.get(3)
-        );
     }
 
-    println!("Palette entry 0: {:?}", palette[0]);
     let palette_bytes: Vec<u8> = palette
         .iter()
         .flat_map(|p| p.as_slice()[0..3].to_owned())
